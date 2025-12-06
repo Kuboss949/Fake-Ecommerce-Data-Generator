@@ -1,0 +1,32 @@
+services:
+  cassandra:
+    image: cassandra:latest # You can specify a version, e.g., cassandra:4.1.3
+    container_name: cassandra-node1
+    ports:
+      - "9042:9042"
+      - "7000:7000" # Intra-node communication
+      - "7001:7001" # SSL intra-node communication
+      - "7199:7199" # JMX
+    environment:
+      - CASSANDRA_CLUSTER_NAME=MyCassandraCluster # Name your cluster
+      - CASSANDRA_DC=datacenter1 # Define the datacenter
+      - CASSANDRA_RACK=rack1 # Define the rack
+      - CASSANDRA_SEEDS=cassandra # Point to itself as a seed in a single-node setup
+      # This is important for a single-node setup to avoid waiting for other nodes
+      - CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch
+    volumes:
+      - cassandra_data:/var/lib/cassandra # Persist Cassandra data
+      - cassandra_logs:/var/log/cassandra # Persist Cassandra logs
+      # Optional: Mount a custom cassandra.yaml if needed
+      # - ./cassandra.yaml:/etc/cassandra/cassandra.yaml
+    healthcheck:
+      test: ["CMD", "cqlsh", "-u", "cassandra", "-p", "cassandra", "-e", "describe keyspaces;"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: always
+
+volumes:
+  cassandra_data:
+  cassandra_logs:

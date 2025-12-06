@@ -1,0 +1,14 @@
+services:
+  firebird:
+    image: firebirdsql/firebird
+    restart: always
+    environment:
+      - FIREBIRD_ROOT_PASSWORD=admin123
+      - FIREBIRD_USER=alice
+      - FIREBIRD_PASSWORD=admin123
+      - FIREBIRD_DATABASE=mirror.fdb
+      - FIREBIRD_DATABASE_DEFAULT_CHARSET=UTF8
+    ports:
+      - "3050:3050"
+    volumes:
+      - ./data:/var/lib/firebird/data
