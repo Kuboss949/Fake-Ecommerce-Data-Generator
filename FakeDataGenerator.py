@@ -514,7 +514,62 @@ class FakeDataGenerator:
                 self.orient_client.command(payment_make)
 
             print("   -> Tworzenie krawędzi (edges)...")
-            self.orient_client.command("SELECT fill_edge()")
+
+            # Customer -> Invoice
+            print("      -> Customer_to_invoice...")
+            customers_result = self.orient_client.command("SELECT FROM CUSTOMER")
+            for c in customers_result:
+                self.orient_client.command(
+                    f"CREATE EDGE Customer_to_invoice FROM (SELECT FROM CUSTOMER WHERE CUSTOMER_ID = {c.oRecordData['CUSTOMER_ID']}) TO (SELECT FROM INVOICE WHERE CUSTOMER_ID = {c.oRecordData['CUSTOMER_ID']})"
+                )
+
+            # Invoice -> Payment
+            print("      -> Invoice_to_payment...")
+            invoices_result = self.orient_client.command("SELECT FROM INVOICE")
+            for i in invoices_result:
+                self.orient_client.command(
+                    f"CREATE EDGE Invoice_to_payment FROM (SELECT FROM INVOICE WHERE INVOICE_ID = {i.oRecordData['INVOICE_ID']}) TO (SELECT FROM PAYMENT WHERE INVOICE_ID = {i.oRecordData['INVOICE_ID']})"
+                )
+
+            # Customer -> Order
+            print("      -> Customer_to_order...")
+            customers_result = self.orient_client.command("SELECT FROM CUSTOMER")
+            for c in customers_result:
+                self.orient_client.command(
+                    f"CREATE EDGE Customer_to_order FROM (SELECT FROM CUSTOMER WHERE CUSTOMER_ID = {c.oRecordData['CUSTOMER_ID']}) TO (SELECT FROM CUSTOMER_ORDER WHERE CUSTOMER_ID = {c.oRecordData['CUSTOMER_ID']})"
+                )
+
+            # Order -> Invoice
+            print("      -> Order_to_invoice...")
+            orders_result = self.orient_client.command("SELECT FROM CUSTOMER_ORDER")
+            for o in orders_result:
+                self.orient_client.command(
+                    f"CREATE EDGE Order_to_invoice FROM (SELECT FROM CUSTOMER_ORDER WHERE ORDER_ID = {o.oRecordData['ORDER_ID']}) TO (SELECT FROM INVOICE WHERE ORDER_ID = {o.oRecordData['ORDER_ID']})"
+                )
+
+            # User -> Invoice
+            print("      -> User_to_invoice...")
+            users_result = self.orient_client.command("SELECT FROM SYS_USER")
+            for u in users_result:
+                self.orient_client.command(
+                    f"CREATE EDGE User_to_invoice FROM (SELECT FROM SYS_USER WHERE USER_ID = {u.oRecordData['USER_ID']}) TO (SELECT FROM INVOICE WHERE CREATED_BY = {u.oRecordData['USER_ID']})"
+                )
+
+            # Order -> Order_Item
+            print("      -> Order_to_order_item...")
+            orders_result = self.orient_client.command("SELECT FROM CUSTOMER_ORDER")
+            for o in orders_result:
+                self.orient_client.command(
+                    f"CREATE EDGE Order_to_order_item FROM (SELECT FROM CUSTOMER_ORDER WHERE ORDER_ID = {o.oRecordData['ORDER_ID']}) TO (SELECT FROM ORDER_ITEM WHERE ORDER_ID = {o.oRecordData['ORDER_ID']})"
+                )
+
+            # Product -> Order_Item
+            print("      -> Product_to_order_item...")
+            products_result = self.orient_client.command("SELECT FROM PRODUCT")
+            for p in products_result:
+                self.orient_client.command(
+                    f"CREATE EDGE Product_to_order_item FROM (SELECT FROM PRODUCT WHERE PRODUCT_ID = {p.oRecordData['PRODUCT_ID']}) TO (SELECT FROM ORDER_ITEM WHERE PRODUCT_ID = {p.oRecordData['PRODUCT_ID']})"
+                )
 
             print("✅ Replikacja do OrientDB zakończona sukcesem!")
 
@@ -522,6 +577,7 @@ class FakeDataGenerator:
             print(f"❌ BŁĄD: {e}")
             self.session.rollback()
             # mirror_session rollback jest robiony wewnątrz funkcji replicate
+            raise e  # Re-raise żeby zobaczyć pełny traceback
         # finally:
         #     self.session.close()
         #     self.mirror_session.close()
