@@ -454,75 +454,76 @@ class FakeDataGenerator:
 
             self.replicate_sql_data(target_session=self.mirror_session)
 
+            # --- UPLOAD DO ORIENTDB ---
+            print("\n📊 Rozpoczynam replikację do OrientDB...")
+
+            print("   -> Dodawanie Customers...")
+            orient_customers = self.session.execute(select(Customer))
+            orient_customers_scalar = orient_customers.scalars().all()
+            for c in orient_customers_scalar:
+                customer_make = "insert into CUSTOMER set CUSTOMER_ID =  %d, NAME =  '%s', EMAIL = '%s' ,PHONE = '%s', ADDRESS = '%s', CITY = '%s', COUNTRY = '%s'"\
+                % (c.CUSTOMER_ID, c.NAME, c.EMAIL, c.PHONE, c.ADDRESS, c.CITY, c.COUNTRY)
+                self.orient_client.command(customer_make)
+
+            print("   -> Dodawanie Users...")
+            orient_users = self.session.execute(select(SysUser))
+            orient_users_scalar = orient_users.scalars().all()
+            for u in orient_users_scalar:
+                user_make = "insert into SYS_USER set USER_ID =  %d, USERNAME = '%s' ,PASSWORD_HASH = '%s', NAME = '%s', SURNAME = '%s', EMAIL = '%s', ROLE = '%s', ACTIVE = '%s'"\
+                % (u.USER_ID, u.USERNAME, u.PASSWORD_HASH, u.NAME, u.SURNAME, u.EMAIL, u.ROLE, u.ACTIVE)
+                self.orient_client.command(user_make)
+
+            print("   -> Dodawanie Products...")
+            orient_products = self.session.execute(select(Product))
+            orient_products_scalar = orient_products.scalars().all()
+            for p in orient_products_scalar:
+                product_make = "insert into PRODUCT set PRODUCT_ID =  %d, NAME = '%s' ,DESCRIPTION = '%s', PRICE = %06.2f, STOCK_QUANTITY = %d" \
+                % (p.PRODUCT_ID, p.NAME, p.DESCRIPTION, p.PRICE, p.STOCK_QUANTITY)
+                self.orient_client.command(product_make)
+
+            print("   -> Dodawanie Orders...")
+            orient_customer_orders = self.session.execute(select(CustomerOrder))
+            orient_customer_orders_scalar = orient_customer_orders.scalars().all()
+            for c in orient_customer_orders_scalar:
+                orders_make = "insert into CUSTOMER_ORDER set ORDER_ID =  %d, CUSTOMER_ID = %d ,ORDER_DATE = '%s', STATUS = '%s', TOTAL_AMOUNT = %f" \
+                % (c.ORDER_ID, c.CUSTOMER_ID, c.ORDER_DATE, c.STATUS, c.TOTAL_AMOUNT)
+                self.orient_client.command(orders_make)
+
+            print("   -> Dodawanie Order Items...")
+            orient_order_items = self.session.execute(select(OrderItem))
+            orient_order_items_scalar = orient_order_items.scalars().all()
+            for o in orient_order_items_scalar:
+                order_item_make = "insert into ORDER_ITEM set ORDER_ITEM_ID = %d, ORDER_ID = %d, PRODUCT_ID = %d, QUANTITY = %d, UNIT_PRICE = %f" \
+                % (o.ORDER_ITEM_ID, o.ORDER_ID, o.PRODUCT_ID, o.QUANTITY, o.UNIT_PRICE)
+                self.orient_client.command(order_item_make)
+
+            print("   -> Dodawanie Invoices...")
+            orient_invoice = self.session.execute(select(Invoice))
+            orient_invoice_scalar = orient_invoice.scalars().all()
+            for i in orient_invoice_scalar:
+                invoice_make = "insert into INVOICE set INVOICE_ID = %d, INVOICE_NUMBER =  '%s', CUSTOMER_ID = %d, ORDER_ID = %d, STATUS = '%s',  ISSUE_DATE = '%s', DUE_DATE = '%s', TOTAL_AMOUNT = %f, CREATED_BY = %d" \
+                % (i.INVOICE_ID, i.INVOICE_NUMBER, i.CUSTOMER_ID, i.ORDER_ID, i.STATUS, i.ISSUE_DATE, i.DUE_DATE, i.TOTAL_AMOUNT, i.CREATED_BY)
+                self.orient_client.command(invoice_make)
+
+            print("   -> Dodawanie Payments...")
+            orient_payment = self.session.execute(select(Payment))
+            orient_payment_scalar = orient_payment.scalars().all()
+            for p in orient_payment_scalar:
+                payment_make = "insert into PAYMENT set PAYMENT_ID =  %d , INVOICE_ID =  %d ,PAYMENT_DATE = '%s', AMOUNT = %f, METHOD = '%s', CONFIRMED = %d" \
+                % (p.PAYMENT_ID, p.INVOICE_ID, p.PAYMENT_DATE, p.AMOUNT, p.METHOD, p.CONFIRMED)
+                self.orient_client.command(payment_make)
+
+            print("   -> Tworzenie krawędzi (edges)...")
+            self.orient_client.command("SELECT fill_edge()")
+
+            print("✅ Replikacja do OrientDB zakończona sukcesem!")
+
         except Exception as e:
-            print(f"BŁĄD SQL: {e}")
+            print(f"❌ BŁĄD: {e}")
             self.session.rollback()
             # mirror_session rollback jest robiony wewnątrz funkcji replicate
         finally:
             self.session.close()
-            self.mirror_session.close()  # Zamykamy też sesję Marii
-
-
-        print("Usuwanie starych danych z OrientDB")
-        # Najpierw usuwamy krawędzie (relacje), żeby nie naruszyć spójności
-        self.orient_client.command("DELETE EDGE E")
-        # Następnie usuwamy wszystkie wierzchołki (dane)
-        self.orient_client.command("DELETE VERTEX V")
-        #upload to orientDB
-        print("Dodawanie danych do OrientDB")
-        #upload to orientDB
-        orient_customers = self.session.execute(select(Customer))
-        orient_customers_scalar = orient_customers.scalars().all()
-        for c in orient_customers_scalar:
-            customer_make = "insert into CUSTOMER set CUSTOMER_ID =  %d, NAME =  '%s', EMAIL = '%s' ,PHONE = '%s', ADDRESS = '%s', CITY = '%s', COUNTRY = '%s'"\
-            % (c.CUSTOMER_ID, c.NAME, c.EMAIL, c.PHONE, c.ADDRESS, c.CITY, c.COUNTRY)
-            self.orient_client.command(customer_make)
-
-        orient_users = self.session.execute(select(SysUser))
-        orient_users_scalar = orient_users.scalars().all()
-        for u in orient_users_scalar:
-            user_make = "insert into SYS_USER set USER_ID =  %d, USERNAME = '%s' ,PASSWORD_HASH = '%s', NAME = '%s', SURNAME = '%s', EMAIL = '%s', ROLE = '%s', ACTIVE = '%s'"\
-            % (u.USER_ID, u.USERNAME, u.PASSWORD_HASH, u.NAME, u.SURNAME, u.EMAIL, u.ROLE, u.ACTIVE)
-            self.orient_client.command(user_make)
-
-        orient_customer_orders = self.session.execute(select(CustomerOrder))
-        orient_customer_orders_scalar = orient_customer_orders.scalars().all()
-        for c in orient_customer_orders_scalar:
-            orders_make = "insert into CUSTOMER_ORDER set ORDER_ID =  %d, ORDER_ID =  %d, CUSTOMER_ID = %d ,ORDER_DATE = '%s', STATUS = '%s', TOTAL_AMOUNT = %f" \
-            % (c.ORDER_ID, c.ORDER_ID, c.CUSTOMER_ID, c.ORDER_DATE, c.STATUS, c.TOTAL_AMOUNT)
-            self.orient_client.command(orders_make)
-
-        orient_invoice = self.session.execute(select(Invoice))
-        orient_invoice_scalar = orient_invoice.scalars().all()
-        for i in orient_invoice_scalar:
-            invoice_make = "insert into INVOICE set INVOICE_ID = %d, INVOICE_NUMBER =  '%s', CUSTOMER_ID = '%s', ORDER_ID = '%s', STATUS = '%s',  ISSUE_DATE = '%s', DUE_DATE = '%s', TOTAL_AMOUNT = '%s', CREATED_BY = '%s'" \
-            % (i.INVOICE_ID, i.INVOICE_NUMBER, i.CUSTOMER_ID, i.ORDER_ID, i.STATUS, i.ISSUE_DATE, i.DUE_DATE, i.TOTAL_AMOUNT, i.CREATED_BY)
-            self.orient_client.command(invoice_make)
-
-        orient_payment = self.session.execute(select(Payment))
-        orient_payment_scalar = orient_payment.scalars().all()
-        for p in orient_payment_scalar:
-            payment_make = "insert into PAYMENT set PAYMENT_ID =  %d , INVOICE_ID =  %d ,PAYMENT_DATE = '%s', AMOUNT = '%s', METHOD = '%s', CONFIRMED = '%s'" \
-            % (p.PAYMENT_ID, p.INVOICE_ID, p.PAYMENT_DATE, p.AMOUNT, p.METHOD, p.CONFIRMED)
-            self.orient_client.command(payment_make)
-
-        orient_products = self.session.execute(select(Product))
-        orient_products_scalar = orient_products.scalars().all()
-        for p in orient_products_scalar:
-            product_make = "insert into PRODUCT set PRODUCT_ID =  %d, NAME = '%s' ,DESCRIPTION = '%s', PRICE = %06.2f, STOCK_QUANTITY = %d" \
-            % (p.PRODUCT_ID, p.NAME, p.DESCRIPTION, p.PRICE, p.STOCK_QUANTITY)
-            self.orient_client.command(product_make)
-
-        orient_order_items = self.session.execute(select(OrderItem))
-        orient_order_items_scalar = orient_order_items.scalars().all()
-        for o in orient_order_items_scalar:
-            order_item_make = "insert into ORDER_ITEM set ORDER_ITEM_ID = %d, ORDER_ID = %d, PRODUCT_ID = %d, QUANTITY = %d, UNIT_PRICE = %f" \
-            % (o.ORDER_ITEM_ID, o.ORDER_ID, o.PRODUCT_ID, o.QUANTITY, o.UNIT_PRICE)
-            self.orient_client.command(order_item_make)
-
-        print("Zakończono dodawanie danych do OrientDB")
-
-        print("Dodawanie połączeń w OrientDB")
-        self.orient_client.command("SELECT fill_edge()")
-        print("Zakończono dodawania połączeń do OrientDB")
-        self.orient_client.db_close()
+            self.mirror_session.close()
+            self.orient_client.db_close()
+            print("🔒 Wszystkie połączenia zamknięte.")
