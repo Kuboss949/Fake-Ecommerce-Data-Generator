@@ -1,0 +1,600 @@
+#!/usr/bin/env python3
+# benchmark.py
+
+"""
+Benchmark dla porównania wydajności baz danych:
+- Firebird
+- MariaDB
+- OrientDB
+- Cassandra
+
+Wykonuje zapytania SELECT, DDL i DML, mierzy czas wykonania
+i zapisuje wyniki do plików CSV.
+"""
+
+import time
+import csv
+from datetime import datetime
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
+import pyorientdb as pyorient
+from cassandra.cluster import Cluster
+from cassandra.cqlengine import connection
+
+# Importy plików z zapytaniami
+from firebird_query import SELECT_QUERIES as FB_SELECT, DDL_QUERIES as FB_DDL, DML_QUERIES as FB_DML
+from mariadb_query import SELECT_QUERIES as MARIA_SELECT, DDL_QUERIES as MARIA_DDL, DML_QUERIES as MARIA_DML
+from orientdb_queries import (
+    ORIENT_SELECT_QUERIES, ORIENT_DDL_QUERIES, ORIENT_DML_QUERIES,
+    execute_orient_query, execute_orient_command
+)
+from cassandra_queries import (
+    CQL_SELECT_QUERIES, CQL_DDL_QUERIES, CQL_DML_QUERIES
+)
+
+
+# ==========================================
+# 🔧 KONFIGURACJA POŁĄCZEŃ
+# ==========================================
+
+FIREBIRD_URL = "firebird+firebird://sysdba:admin123@localhost:3050//var/lib/firebird/data/mirror.fdb?charset=UTF8"
+MARIADB_URL = "mysql+pymysql://root:my-secret-pw@localhost:3306/company_db"
+
+ORIENTDB_HOST = "localhost"
+ORIENTDB_PORT = 2424
+ORIENTDB_USER = "root"
+ORIENTDB_PASS = "root"
+ORIENTDB_DB = "company"
+
+CASSANDRA_NODES = ['127.0.0.1']
+CASSANDRA_KEYSPACE = 'my_keyspace'
+
+# ==========================================
+# 📊 BENCHMARK RESULTS STORAGE
+# ==========================================
+
+benchmark_results = []
+
+
+# ==========================================
+# 🔌 FUNKCJE POŁĄCZENIOWE
+# ==========================================
+
+def connect_firebird():
+    """Połączenie z Firebird"""
+    print("🔥 Łączenie z Firebird...")
+    engine = create_engine(FIREBIRD_URL)
+    Session = sessionmaker(bind=engine)
+    return Session(), engine
+
+
+def connect_mariadb():
+    """Połączenie z MariaDB"""
+    print("🐬 Łączenie z MariaDB...")
+    engine = create_engine(MARIADB_URL)
+    Session = sessionmaker(bind=engine)
+    return Session(), engine
+
+
+def connect_orientdb():
+    """Połączenie z OrientDB"""
+    print("🥑 Łączenie z OrientDB...")
+    client = pyorient.OrientDB(ORIENTDB_HOST, ORIENTDB_PORT)
+    client.connect(ORIENTDB_USER, ORIENTDB_PASS)
+    client.db_open(ORIENTDB_DB, ORIENTDB_USER, ORIENTDB_PASS)
+    return client
+
+
+def connect_cassandra():
+    """Połączenie z Cassandra"""
+    print("👁️ Łączenie z Cassandra...")
+    cluster = Cluster(CASSANDRA_NODES)
+    session = cluster.connect(CASSANDRA_KEYSPACE)
+    return session, cluster
+
+
+# ==========================================
+# ⏱️ FUNKCJE BENCHMARKOWE
+# ==========================================
+
+def benchmark_sql_query(session, query_name, query_text, db_name):
+    """
+    Wykonuje zapytanie SQL (Firebird/MariaDB) i mierzy czas.
+
+    Args:
+        session: Sesja SQLAlchemy
+        query_name: Nazwa zapytania
+        query_text: Tekst zapytania SQL
+        db_name: Nazwa bazy danych (Firebird/MariaDB)
+
+    Returns:
+        Dict z wynikami benchmarku
+    """
+    print(f"   📌 {db_name}: {query_name}...", end=" ")
+
+    try:
+        start_time = time.time()
+        result = session.execute(text(query_text))
+        rows = result.fetchall()
+        end_time = time.time()
+
+        execution_time = (end_time - start_time) * 1000  # ms
+        row_count = len(rows)
+
+        print(f"✅ {execution_time:.2f}ms ({row_count} rows)")
+
+        return {
+            "database": db_name,
+            "query_type": "SELECT",
+            "query_name": query_name,
+            "execution_time_ms": round(execution_time, 2),
+            "row_count": row_count,
+            "status": "SUCCESS",
+            "error": None
+        }
+
+    except Exception as e:
+        print(f"❌ ERROR: {str(e)[:50]}")
+        return {
+            "database": db_name,
+            "query_type": "SELECT",
+            "query_name": query_name,
+            "execution_time_ms": None,
+            "row_count": None,
+            "status": "ERROR",
+            "error": str(e)[:200]
+        }
+
+
+def benchmark_sql_command(session, query_name, query_text, db_name, query_type="DML"):
+    """
+    Wykonuje komendę SQL (UPDATE/DELETE/ALTER) i mierzy czas.
+
+    Args:
+        session: Sesja SQLAlchemy
+        query_name: Nazwa zapytania
+        query_text: Tekst zapytania SQL
+        db_name: Nazwa bazy danych
+        query_type: Typ zapytania (DDL/DML)
+
+    Returns:
+        Dict z wynikami benchmarku
+    """
+    print(f"   📌 {db_name}: {query_name}...", end=" ")
+
+    try:
+        start_time = time.time()
+        result = session.execute(text(query_text))
+        session.commit()
+        end_time = time.time()
+
+        execution_time = (end_time - start_time) * 1000  # ms
+
+        print(f"✅ {execution_time:.2f}ms")
+
+        return {
+            "database": db_name,
+            "query_type": query_type,
+            "query_name": query_name,
+            "execution_time_ms": round(execution_time, 2),
+            "row_count": None,
+            "status": "SUCCESS",
+            "error": None
+        }
+
+    except Exception as e:
+        session.rollback()
+        print(f"❌ ERROR: {str(e)[:50]}")
+        return {
+            "database": db_name,
+            "query_type": query_type,
+            "query_name": query_name,
+            "execution_time_ms": None,
+            "row_count": None,
+            "status": "ERROR",
+            "error": str(e)[:200]
+        }
+
+
+def benchmark_orient_query(client, query_name, query_text):
+    """
+    Wykonuje zapytanie OrientDB i mierzy czas.
+
+    Args:
+        client: Klient pyorient
+        query_name: Nazwa zapytania
+        query_text: Tekst zapytania
+
+    Returns:
+        Dict z wynikami benchmarku
+    """
+    print(f"   📌 OrientDB: {query_name}...", end=" ")
+
+    try:
+        start_time = time.time()
+        result = execute_orient_query(client, query_text)
+        end_time = time.time()
+
+        execution_time = (end_time - start_time) * 1000  # ms
+        row_count = len(result)
+
+        print(f"✅ {execution_time:.2f}ms ({row_count} rows)")
+
+        return {
+            "database": "OrientDB",
+            "query_type": "SELECT",
+            "query_name": query_name,
+            "execution_time_ms": round(execution_time, 2),
+            "row_count": row_count,
+            "status": "SUCCESS",
+            "error": None
+        }
+
+    except Exception as e:
+        print(f"❌ ERROR: {str(e)[:50]}")
+        return {
+            "database": "OrientDB",
+            "query_type": "SELECT",
+            "query_name": query_name,
+            "execution_time_ms": None,
+            "row_count": None,
+            "status": "ERROR",
+            "error": str(e)[:200]
+        }
+
+
+def benchmark_orient_command(client, query_name, query_text, query_type="DML"):
+    """
+    Wykonuje komendę OrientDB (UPDATE/DELETE/ALTER) i mierzy czas.
+
+    Args:
+        client: Klient pyorient
+        query_name: Nazwa zapytania
+        query_text: Tekst zapytania
+        query_type: Typ zapytania (DDL/DML)
+
+    Returns:
+        Dict z wynikami benchmarku
+    """
+    print(f"   📌 OrientDB: {query_name}...", end=" ")
+
+    try:
+        start_time = time.time()
+        execute_orient_command(client, query_text)
+        end_time = time.time()
+
+        execution_time = (end_time - start_time) * 1000  # ms
+
+        print(f"✅ {execution_time:.2f}ms")
+
+        return {
+            "database": "OrientDB",
+            "query_type": query_type,
+            "query_name": query_name,
+            "execution_time_ms": round(execution_time, 2),
+            "row_count": None,
+            "status": "SUCCESS",
+            "error": None
+        }
+
+    except Exception as e:
+        print(f"❌ ERROR: {str(e)[:50]}")
+        return {
+            "database": "OrientDB",
+            "query_type": query_type,
+            "query_name": query_name,
+            "execution_time_ms": None,
+            "row_count": None,
+            "status": "ERROR",
+            "error": str(e)[:200]
+        }
+
+
+def benchmark_cassandra_query(session, query_name, query_text):
+    """
+    Wykonuje zapytanie Cassandra i mierzy czas.
+
+    Args:
+        session: Sesja Cassandra
+        query_name: Nazwa zapytania
+        query_text: Tekst zapytania CQL
+
+    Returns:
+        Dict z wynikami benchmarku
+    """
+    print(f"   📌 Cassandra: {query_name}...", end=" ")
+
+    try:
+        start_time = time.time()
+        result = session.execute(query_text)
+        rows = list(result)
+        end_time = time.time()
+
+        execution_time = (end_time - start_time) * 1000  # ms
+        row_count = len(rows)
+
+        print(f"✅ {execution_time:.2f}ms ({row_count} rows)")
+
+        return {
+            "database": "Cassandra",
+            "query_type": "SELECT",
+            "query_name": query_name,
+            "execution_time_ms": round(execution_time, 2),
+            "row_count": row_count,
+            "status": "SUCCESS",
+            "error": None
+        }
+
+    except Exception as e:
+        print(f"❌ ERROR: {str(e)[:50]}")
+        return {
+            "database": "Cassandra",
+            "query_type": "SELECT",
+            "query_name": query_name,
+            "execution_time_ms": None,
+            "row_count": None,
+            "status": "ERROR",
+            "error": str(e)[:200]
+        }
+
+
+def benchmark_cassandra_command(session, query_name, query_text, query_type="DML"):
+    """
+    Wykonuje komendę Cassandra (UPDATE/DELETE/ALTER) i mierzy czas.
+
+    Args:
+        session: Sesja Cassandra
+        query_name: Nazwa zapytania
+        query_text: Tekst zapytania CQL
+        query_type: Typ zapytania (DDL/DML)
+
+    Returns:
+        Dict z wynikami benchmarku
+    """
+    print(f"   📌 Cassandra: {query_name}...", end=" ")
+
+    try:
+        start_time = time.time()
+        session.execute(query_text)
+        end_time = time.time()
+
+        execution_time = (end_time - start_time) * 1000  # ms
+
+        print(f"✅ {execution_time:.2f}ms")
+
+        return {
+            "database": "Cassandra",
+            "query_type": query_type,
+            "query_name": query_name,
+            "execution_time_ms": round(execution_time, 2),
+            "row_count": None,
+            "status": "SUCCESS",
+            "error": None
+        }
+
+    except Exception as e:
+        print(f"❌ ERROR: {str(e)[:50]}")
+        return {
+            "database": "Cassandra",
+            "query_type": query_type,
+            "query_name": query_name,
+            "execution_time_ms": None,
+            "row_count": None,
+            "status": "ERROR",
+            "error": str(e)[:200]
+        }
+
+
+# ==========================================
+# 🎯 FUNKCJE GŁÓWNE BENCHMARKU
+# ==========================================
+
+def run_select_benchmarks(fb_session, maria_session, orient_client, cassandra_session):
+    """Uruchamia benchmarki dla zapytań SELECT"""
+    print("\n" + "="*60)
+    print("🔍 BENCHMARK: SELECT QUERIES")
+    print("="*60)
+
+    # Firebird SELECT
+    print("\n🔥 Firebird SELECT:")
+    for name, query in FB_SELECT.items():
+        result = benchmark_sql_query(fb_session, name, query, "Firebird")
+        benchmark_results.append(result)
+
+    # MariaDB SELECT
+    print("\n🐬 MariaDB SELECT:")
+    for name, query in MARIA_SELECT.items():
+        result = benchmark_sql_query(maria_session, name, query, "MariaDB")
+        benchmark_results.append(result)
+
+    # OrientDB SELECT
+    print("\n🥑 OrientDB SELECT:")
+    for name, query in ORIENT_SELECT_QUERIES.items():
+        result = benchmark_orient_query(orient_client, name, query)
+        benchmark_results.append(result)
+
+    # Cassandra SELECT - z podstawionymi parametrami
+    print("\n👁️ Cassandra SELECT:")
+
+    # Dla Cassandry niektóre zapytania wymagają parametrów
+    cassandra_queries_with_params = {
+        "accountants": CQL_SELECT_QUERIES["accountants"],
+        # customers_in_city wymaga city - pomijamy lub użyjemy próbkowej
+        "products_low_price": CQL_SELECT_QUERIES["products_low_price"],
+        # Inne zapytania z parametrami pomijamy lub dodajemy przykładowe wartości
+    }
+
+    for name, query in cassandra_queries_with_params.items():
+        result = benchmark_cassandra_query(cassandra_session, name, query)
+        benchmark_results.append(result)
+
+
+def run_ddl_benchmarks(fb_session, maria_session, orient_client, cassandra_session):
+    """Uruchamia benchmarki dla zapytań DDL (ALTER TABLE)"""
+    print("\n" + "="*60)
+    print("🛠️ BENCHMARK: DDL QUERIES (ALTER TABLE)")
+    print("="*60)
+
+    # Firebird DDL
+    print("\n🔥 Firebird DDL:")
+    for name, query in FB_DDL.items():
+        result = benchmark_sql_command(fb_session, name, query, "Firebird", "DDL")
+        benchmark_results.append(result)
+
+    # MariaDB DDL
+    print("\n🐬 MariaDB DDL:")
+    for name, query in MARIA_DDL.items():
+        result = benchmark_sql_command(maria_session, name, query, "MariaDB", "DDL")
+        benchmark_results.append(result)
+
+    # OrientDB DDL
+    print("\n🥑 OrientDB DDL:")
+    for name, query in ORIENT_DDL_QUERIES.items():
+        result = benchmark_orient_command(orient_client, name, query, "DDL")
+        benchmark_results.append(result)
+
+    # Cassandra DDL
+    print("\n👁️ Cassandra DDL:")
+    for name, query in CQL_DDL_QUERIES.items():
+        result = benchmark_cassandra_command(cassandra_session, name, query, "DDL")
+        benchmark_results.append(result)
+
+
+def run_dml_benchmarks(fb_session, maria_session, orient_client, cassandra_session):
+    """Uruchamia benchmarki dla zapytań DML (UPDATE/DELETE)"""
+    print("\n" + "="*60)
+    print("✏️ BENCHMARK: DML QUERIES (UPDATE/DELETE)")
+    print("="*60)
+
+    # Firebird DML
+    print("\n🔥 Firebird DML:")
+    for name, query in FB_DML.items():
+        result = benchmark_sql_command(fb_session, name, query, "Firebird", "DML")
+        benchmark_results.append(result)
+
+    # MariaDB DML
+    print("\n🐬 MariaDB DML:")
+    for name, query in MARIA_DML.items():
+        result = benchmark_sql_command(maria_session, name, query, "MariaDB", "DML")
+        benchmark_results.append(result)
+
+    # OrientDB DML
+    print("\n🥑 OrientDB DML:")
+    for name, query in ORIENT_DML_QUERIES.items():
+        result = benchmark_orient_command(orient_client, name, query, "DML")
+        benchmark_results.append(result)
+
+    # Cassandra DML - z podstawionymi parametrami
+    print("\n👁️ Cassandra DML:")
+    # Cassandra wymaga konkretnych ID - pomijamy lub dodajemy przykładowe
+    cassandra_dml_simple = {
+        "delete_all_products": CQL_DML_QUERIES["delete_all_products"]
+    }
+
+    for name, query in cassandra_dml_simple.items():
+        result = benchmark_cassandra_command(cassandra_session, name, query, "DML")
+        benchmark_results.append(result)
+
+
+# ==========================================
+# 💾 FUNKCJE ZAPISU WYNIKÓW
+# ==========================================
+
+def save_results_to_csv():
+    """Zapisuje wyniki benchmarku do pliku CSV"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"benchmark_results_{timestamp}.csv"
+
+    print(f"\n💾 Zapisywanie wyników do: {filename}")
+
+    fieldnames = [
+        "database",
+        "query_type",
+        "query_name",
+        "execution_time_ms",
+        "row_count",
+        "status",
+        "error"
+    ]
+
+    with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(benchmark_results)
+
+    print(f"✅ Zapisano {len(benchmark_results)} wyników do {filename}")
+
+
+def print_summary():
+    """Wyświetla podsumowanie wyników benchmarku"""
+    print("\n" + "="*60)
+    print("📊 PODSUMOWANIE BENCHMARKU")
+    print("="*60)
+
+    databases = set(r["database"] for r in benchmark_results)
+
+    for db in databases:
+        db_results = [r for r in benchmark_results if r["database"] == db]
+        success_count = len([r for r in db_results if r["status"] == "SUCCESS"])
+        error_count = len([r for r in db_results if r["status"] == "ERROR"])
+
+        avg_time = None
+        if success_count > 0:
+            times = [r["execution_time_ms"] for r in db_results if r["execution_time_ms"] is not None]
+            if times:
+                avg_time = sum(times) / len(times)
+
+        print(f"\n{db}:")
+        print(f"   ✅ Sukces: {success_count}")
+        print(f"   ❌ Błędy: {error_count}")
+        if avg_time:
+            print(f"   ⏱️ Średni czas: {avg_time:.2f}ms")
+
+
+# ==========================================
+# 🚀 MAIN
+# ==========================================
+
+def main():
+    """Główna funkcja benchmarku"""
+    print("="*60)
+    print("🏁 BENCHMARK BAZ DANYCH - START")
+    print("="*60)
+
+    # Połączenia z bazami danych
+    fb_session, fb_engine = connect_firebird()
+    maria_session, maria_engine = connect_mariadb()
+    orient_client = connect_orientdb()
+    cassandra_session, cassandra_cluster = connect_cassandra()
+
+    try:
+        # Uruchomienie benchmarków
+        run_select_benchmarks(fb_session, maria_session, orient_client, cassandra_session)
+        run_ddl_benchmarks(fb_session, maria_session, orient_client, cassandra_session)
+        run_dml_benchmarks(fb_session, maria_session, orient_client, cassandra_session)
+
+        # Podsumowanie i zapis
+        print_summary()
+        save_results_to_csv()
+
+    except Exception as e:
+        print(f"\n❌ KRYTYCZNY BŁĄD: {e}")
+        import traceback
+        traceback.print_exc()
+
+    finally:
+        # Zamknięcie połączeń
+        print("\n🔒 Zamykanie połączeń...")
+        fb_session.close()
+        maria_session.close()
+        orient_client.db_close()
+        cassandra_session.shutdown()
+        cassandra_cluster.shutdown()
+
+    print("\n" + "="*60)
+    print("🏁 BENCHMARK BAZ DANYCH - KONIEC")
+    print("="*60)
+
+
+if __name__ == "__main__":
+    main()
