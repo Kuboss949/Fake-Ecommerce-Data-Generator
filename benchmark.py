@@ -15,11 +15,9 @@ i zapisuje wyniki do plików CSV.
 import time
 import csv
 from datetime import datetime
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
-import pyorientdb as pyorient
+from contextlib import contextmanager
+from sqlalchemy import text
 from cassandra.cluster import Cluster
-from cassandra.cqlengine import connection
 
 # Importy plików z zapytaniami
 from firebird_query import SELECT_QUERIES as FB_SELECT, DDL_QUERIES as FB_DDL, DML_QUERIES as FB_DML
@@ -34,20 +32,25 @@ from cassandra_queries import (
 
 
 # ==========================================
-# 🔧 KONFIGURACJA POŁĄCZEŃ
+# ⏱️ EXECUTION TIMER - CONTEXT MANAGER
 # ==========================================
 
-FIREBIRD_URL = "firebird+firebird://sysdba:admin123@localhost:3050//var/lib/firebird/data/mirror.fdb?charset=UTF8"
-MARIADB_URL = "mysql+pymysql://root:my-secret-pw@localhost:3306/company_db"
+@contextmanager
+def ExecutionTimer(name="Operation"):
+    """
+    Context manager do mierzenia czasu wykonania.
 
-ORIENTDB_HOST = "localhost"
-ORIENTDB_PORT = 2424
-ORIENTDB_USER = "root"
-ORIENTDB_PASS = "root"
-ORIENTDB_DB = "company"
+    Usage:
+        with ExecutionTimer("My operation"):
+            # kod do zmierzenia
+    """
+    print(f"⏱️  {name}...", end=" ", flush=True)
+    start_time = time.time()
+    yield
+    end_time = time.time()
+    elapsed = (end_time - start_time) * 1000  # ms
+    print(f"✅ {elapsed:.2f}ms")
 
-CASSANDRA_NODES = ['127.0.0.1']
-CASSANDRA_KEYSPACE = 'my_keyspace'
 
 # ==========================================
 # 📊 BENCHMARK RESULTS STORAGE
@@ -57,39 +60,14 @@ benchmark_results = []
 
 
 # ==========================================
-# 🔌 FUNKCJE POŁĄCZENIOWE
+# 🔌 FUNKCJA DO POŁĄCZENIA Z CASSANDRĄ
 # ==========================================
 
-def connect_firebird():
-    """Połączenie z Firebird"""
-    print("🔥 Łączenie z Firebird...")
-    engine = create_engine(FIREBIRD_URL)
-    Session = sessionmaker(bind=engine)
-    return Session(), engine
-
-
-def connect_mariadb():
-    """Połączenie z MariaDB"""
-    print("🐬 Łączenie z MariaDB...")
-    engine = create_engine(MARIADB_URL)
-    Session = sessionmaker(bind=engine)
-    return Session(), engine
-
-
-def connect_orientdb():
-    """Połączenie z OrientDB"""
-    print("🥑 Łączenie z OrientDB...")
-    client = pyorient.OrientDB(ORIENTDB_HOST, ORIENTDB_PORT)
-    client.connect(ORIENTDB_USER, ORIENTDB_PASS)
-    client.db_open(ORIENTDB_DB, ORIENTDB_USER, ORIENTDB_PASS)
-    return client
-
-
-def connect_cassandra():
-    """Połączenie z Cassandra"""
+def connect_cassandra(keyspace='my_keyspace', nodes=['127.0.0.1']):
+    """Połączenie z Cassandra - tylko ta baza potrzebuje własnego połączenia"""
     print("👁️ Łączenie z Cassandra...")
-    cluster = Cluster(CASSANDRA_NODES)
-    session = cluster.connect(CASSANDRA_KEYSPACE)
+    cluster = Cluster(nodes)
+    session = cluster.connect(keyspace)
     return session, cluster
 
 
@@ -501,7 +479,12 @@ def run_dml_benchmarks(fb_session, maria_session, orient_client, cassandra_sessi
 # ==========================================
 
 def save_results_to_csv():
-    """Zapisuje wyniki benchmarku do pliku CSV"""
+    """
+    Zapisuje wyniki benchmarku do pliku CSV.
+
+    Returns:
+        str: Ścieżka do zapisanego pliku CSV
+    """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"benchmark_results_{timestamp}.csv"
 
@@ -523,6 +506,7 @@ def save_results_to_csv():
         writer.writerows(benchmark_results)
 
     print(f"✅ Zapisano {len(benchmark_results)} wyników do {filename}")
+    return filename
 
 
 def print_summary():
@@ -555,46 +539,59 @@ def print_summary():
 # 🚀 MAIN
 # ==========================================
 
-def main():
-    """Główna funkcja benchmarku"""
-    print("="*60)
+def run_benchmark(fb_session, maria_session, orient_client):
+    """
+    Główna funkcja benchmarku - przyjmuje sesje z zewnątrz.
+
+    Args:
+        fb_session: Sesja Firebird
+        maria_session: Sesja MariaDB
+        orient_client: Klient OrientDB
+
+    Returns:
+        str: Ścieżka do pliku CSV z wynikami
+    """
+    print("\n" + "="*60)
     print("🏁 BENCHMARK BAZ DANYCH - START")
     print("="*60)
 
-    # Połączenia z bazami danych
-    fb_session, fb_engine = connect_firebird()
-    maria_session, maria_engine = connect_mariadb()
-    orient_client = connect_orientdb()
+    # Połączenie tylko z Cassandrą (inne sesje są z parametrów)
     cassandra_session, cassandra_cluster = connect_cassandra()
 
     try:
         # Uruchomienie benchmarków
-        run_select_benchmarks(fb_session, maria_session, orient_client, cassandra_session)
-        run_ddl_benchmarks(fb_session, maria_session, orient_client, cassandra_session)
-        run_dml_benchmarks(fb_session, maria_session, orient_client, cassandra_session)
+        with ExecutionTimer("SELECT benchmarks"):
+            run_select_benchmarks(fb_session, maria_session, orient_client, cassandra_session)
+
+        with ExecutionTimer("DDL benchmarks"):
+            run_ddl_benchmarks(fb_session, maria_session, orient_client, cassandra_session)
+
+        with ExecutionTimer("DML benchmarks"):
+            run_dml_benchmarks(fb_session, maria_session, orient_client, cassandra_session)
 
         # Podsumowanie i zapis
         print_summary()
-        save_results_to_csv()
+        csv_path = save_results_to_csv()
+
+        print("\n" + "="*60)
+        print("🏁 BENCHMARK BAZ DANYCH - KONIEC")
+        print("="*60)
+
+        return csv_path
 
     except Exception as e:
         print(f"\n❌ KRYTYCZNY BŁĄD: {e}")
         import traceback
         traceback.print_exc()
+        return None
 
     finally:
-        # Zamknięcie połączeń
-        print("\n🔒 Zamykanie połączeń...")
-        fb_session.close()
-        maria_session.close()
-        orient_client.db_close()
+        # Zamknięcie tylko Cassandry (inne sesje są zarządzane w main.py)
+        print("\n🔒 Zamykanie połączenia Cassandra...")
         cassandra_session.shutdown()
         cassandra_cluster.shutdown()
 
-    print("\n" + "="*60)
-    print("🏁 BENCHMARK BAZ DANYCH - KONIEC")
-    print("="*60)
-
 
 if __name__ == "__main__":
-    main()
+    print("❌ Ten skrypt powinien być wywoływany z main.py, nie bezpośrednio!")
+    print("Użyj: python main.py")
