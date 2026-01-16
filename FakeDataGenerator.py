@@ -6,16 +6,46 @@ from datetime import datetime, timedelta
 from faker import Faker
 from sqlalchemy.orm import Session
 from sqlalchemy import select
+from sqlalchemy import inspect
+from cassandra.cqlengine.query import BatchQuery
+from cassandra_tables import (
+    UsersByRole, CustomersByCity, ProductsByPrice,
+    InvoiceFullDetails, PaymentsByYearAmount,
+    SalesStatsByCountry, CustomerLeaderboard,
+    InvoicesByCustomerName, OrderItemsByProduct,
+    init_cassandra_schema
+)
 
-# Import Twoich modeli SQL
 from modele import Base, SysUser, Customer, Product, CustomerOrder, OrderItem, Invoice, Payment
 
-#import i inicjalizowanie połączenia z orient 1.5.6
-import pyorient       
-orient_engine = pyorient.OrientDB("localhost", 2424)
-orient_engine.set_session_token(True)
-orient_session = orient_engine.connect("root", "root")
-orient_engine.db_open( 'company', "root", "root" )
+#import i inicjalizowanie połączenia z orientdb 1.5.6
+import pyorientdb as pyorient
+
+DB_NAME = 'company'
+DB_USER = 'root'
+DB_PASS = 'root'
+
+try:
+    # 1. Połączenie z serwerem
+    orient_engine = pyorient.OrientDB("localhost", 2424)
+    orient_session = orient_engine.connect(DB_USER, DB_PASS)
+
+    # 2. TWARDY RESET - Jeśli baza istnieje, usuwamy ją!
+    if orient_engine.db_exists(DB_NAME, pyorient.STORAGE_TYPE_PLOCAL):
+        print(f"Baza '{DB_NAME}' istnieje. Usuwam ją (DROP)...")
+        orient_engine.db_drop(DB_NAME)
+
+    # 3. Tworzymy świeżą, pustą bazę
+    print(f"Tworzę nową bazę '{DB_NAME}'...")
+    orient_engine.db_create(DB_NAME, pyorient.DB_TYPE_GRAPH, pyorient.STORAGE_TYPE_PLOCAL)
+
+    # 4. Otwarcie bazy
+    orient_engine.db_open(DB_NAME, DB_USER, DB_PASS)
+    print("Połączono z czystym OrientDB.")
+
+except Exception as e:
+    print(f"Błąd połączenia z OrientDB: {e}")
+    raise e
 
 def create_tables_orient():
     orient_engine.command("create class  CUSTOMER extends V")
@@ -25,15 +55,8 @@ def create_tables_orient():
     orient_engine.command("create class  PAYMENT extends V")
     orient_engine.command("create class  PRODUCT extends V")
     orient_engine.command("create class SYS_USER extends V")
-    
 
-# Import modeli Cassandry (zakładam, że plik to cassandra_tables.py)
-from cassandra_tables import (
-    UsersByRole, CustomersByCity, ProductsByPrice,
-    InvoiceFullDetails, PaymentsByYearAmount,
-    SalesStatsByCountry, CustomerLeaderboard,
-    init_cassandra_schema
-)
+
 
 
 class FakeDataGenerator:
@@ -281,25 +304,48 @@ class FakeDataGenerator:
             )
 
         # --- CASSANDRA WRITE (Invoice Full Details) ---
-        # Symulujemy ID faktury (w realu pobralibysmy po save)
-        fake_invoice_id = random.randint(1, 10000000)
+            # --- CASSANDRA WRITE (Invoice Full Details & Helpers) ---
+            # Symulujemy ID faktury (w realu pobralibysmy po save)
+            fake_invoice_id = random.randint(1, 10000000)
 
-        InvoiceFullDetails.create(
-            invoice_id=fake_invoice_id,
-            invoice_number=invoice_number,
-            issue_date=issue_date.date(),
-            due_date=due_date.date(),
-            total_amount=float(total_amount),
-            status=status,
-            past_due=False,
-            # Dane zdenormalizowane
-            customer_id=customer_obj.CUSTOMER_ID if hasattr(customer_obj, 'CUSTOMER_ID') else 0,
-            customer_name=customer_obj.NAME,
-            customer_email=customer_obj.EMAIL,
-            payment_method=payment_method if payment_method else "N/A",
-            payment_amount=payment_amount,
-            payment_confirmed=payment_confirmed
-        )
+            # Używamy BatchQuery, żeby wysłać dane do 3 tabel
+            with BatchQuery() as b:
+                # 1. Główna tabela faktur
+                InvoiceFullDetails.batch(b).create(
+                    invoice_id=fake_invoice_id,
+                    invoice_number=invoice_number,
+                    issue_date=issue_date.date(),
+                    due_date=due_date.date(),
+                    total_amount=float(total_amount),
+                    status=status,
+                    past_due=False,
+                    # Dane zdenormalizowane
+                    customer_id=customer_obj.CUSTOMER_ID if hasattr(customer_obj, 'CUSTOMER_ID') else 0,
+                    customer_name=customer_obj.NAME,
+                    customer_email=customer_obj.EMAIL,
+                    payment_method=payment_method if payment_method else "N/A",
+                    payment_amount=payment_amount,
+                    payment_confirmed=payment_confirmed
+                )
+
+                # 2. Tabela pomocnicza dla UPDATE (po nazwie klienta)
+                InvoicesByCustomerName.batch(b).create(
+                    customer_name=customer_obj.NAME,
+                    invoice_id=fake_invoice_id,
+                    total_amount=float(total_amount),
+                    status=status
+                )
+
+                # 3. Tabela pomocnicza dla DELETE (po produkcie)
+                # Iterujemy po przedmiotach z tego konkretnego zamówienia
+                # order.order_items mamy dostępne, bo przekazałeś obiekt order do funkcji
+                for item in order.order_items:
+                    OrderItemsByProduct.batch(b).create(
+                        product_id=item.PRODUCT_ID,
+                        invoice_id=fake_invoice_id,
+                        quantity=item.QUANTITY,
+                        unit_price=float(item.UNIT_PRICE)
+                    )
 
         # --- CASSANDRA AGGREGATION (Leaderboard) ---
         # Zbieramy dane do tabeli "Customer 360"
@@ -359,7 +405,53 @@ class FakeDataGenerator:
                     last_invoice_date=data['last_invoice'].date()
                 )
 
-    def run_generation(self, num_users: int, num_customers: int, num_orders: int):
+    def replicate_sql_data(self, target_session):
+        """Kopiuje dane z bieżącej sesji (Firebird) do sesji docelowej (MariaDB)"""
+        print("\n🔄 Rozpoczynam replikację danych (Firebird -> MariaDB)...")
+
+        # Kolejność tabel jest WAŻNA (od rodzica do dziecka), żeby nie naruszyć Kluczy Obcych
+        models_order = [
+            SysUser,
+            Product,
+            Customer,
+            CustomerOrder,
+            OrderItem,
+            Invoice,
+            Payment
+        ]
+
+        try:
+            for model in models_order:
+                model_name = model.__tablename__
+                # 1. Pobieramy dane z Firebirda (self.session)
+                source_objects = self.session.query(model).all()
+                count = len(source_objects)
+                print(f"   ➡️ Kopiowanie tabeli: {model_name} ({count} rekordów)...")
+
+                target_objects = []
+                for obj in source_objects:
+                    # 2. Klonujemy obiekt "na czysto" wyciągając dane do słownika
+                    # inspect().mapper.column_attrs daje nam listę kolumn z modelu
+                    data = {c.key: getattr(obj, c.key) for c in inspect(model).mapper.column_attrs}
+
+                    # Tworzymy nową instancję dla MariaDB
+                    new_obj = model(**data)
+                    target_objects.append(new_obj)
+
+                # 3. Zapisujemy paczkę do MariaDB
+                if target_objects:
+                    target_session.bulk_save_objects(target_objects)
+                    # Commitujemy po każdej tabeli, żeby ID były widoczne dla następnych tabel (FK)
+                    target_session.commit()
+
+            print("✅ Replikacja zakończona sukcesem!")
+
+        except Exception as e:
+            print(f"❌ Błąd podczas replikacji: {e}")
+            target_session.rollback()
+            raise e
+
+    def run_generation(self, num_users: int, num_customers: int, num_orders: int, session_mirror: Session):
         print("Przed start: Generowanie tabel orientDB")
         create_tables_orient()
 
@@ -393,18 +485,26 @@ class FakeDataGenerator:
         self.flush_cassandra_stats()
 
         try:
-            print("Commit SQL...")
-            self.session.commit()
-            print("Gotowe.")
+            print("Commit SQL (Firebird)...")
+            self.session.commit()  # Zapisujemy w Firebirdzie
+            print("Gotowe - Firebird zapisany.")
+
+            self.replicate_sql_data(target_session=session_mirror)
+
         except Exception as e:
             print(f"BŁĄD SQL: {e}")
             self.session.rollback()
+            # session_mirror rollback jest robiony wewnątrz funkcji replicate
         finally:
             self.session.close()
+            session_mirror.close()  # Zamykamy też sesję Marii
 
 
         print("Usuwanie starych danych z OrientDB")
-        orient_engine.command("SELECT drop_all_data()")
+        # Najpierw usuwamy krawędzie (relacje), żeby nie naruszyć spójności
+        orient_engine.command("DELETE EDGE E")
+        # Następnie usuwamy wszystkie wierzchołki (dane)
+        orient_engine.command("DELETE VERTEX V")
         #upload to orientDB
         print("Dodawanie danych do OrientDB")
         #upload to orientDB
@@ -428,14 +528,14 @@ class FakeDataGenerator:
             orders_make = "insert into CUSTOMER_ORDER set ORDER_ID =  %d, ORDER_ID =  %d, CUSTOMER_ID = %d ,ORDER_DATE = '%s', STATUS = '%s', TOTAL_AMOUNT = %f" \
             % (c.ORDER_ID, c.ORDER_ID, c.CUSTOMER_ID, c.ORDER_DATE, c.STATUS, c.TOTAL_AMOUNT)
             orient_engine.command(orders_make)
- 
+
         orient_invoice = self.session.execute(select(Invoice))
         orient_invoice_scalar = orient_invoice.scalars().all()
         for i in orient_invoice_scalar:
             invoice_make = "insert into INVOICE set INVOICE_ID = %d, INVOICE_NUMBER =  '%s', CUSTOMER_ID = '%s', ORDER_ID = '%s', STATUS = '%s',  ISSUE_DATE = '%s', DUE_DATE = '%s', TOTAL_AMOUNT = '%s', CREATED_BY = '%s'" \
             % (i.INVOICE_ID, i.INVOICE_NUMBER, i.CUSTOMER_ID, i.ORDER_ID, i.STATUS, i.ISSUE_DATE, i.DUE_DATE, i.TOTAL_AMOUNT, i.CREATED_BY)
             orient_engine.command(invoice_make)
-            
+
         orient_payment = self.session.execute(select(Payment))
         orient_payment_scalar = orient_payment.scalars().all()
         for p in orient_payment_scalar:
@@ -456,7 +556,7 @@ class FakeDataGenerator:
             order_item_make = "insert into ORDER_ITEM set ORDER_ITEM_ID = %d, ORDER_ID = %d, PRODUCT_ID = %d, QUANTITY = %d, UNIT_PRICE = %f" \
             % (o.ORDER_ITEM_ID, o.ORDER_ID, o.PRODUCT_ID, o.QUANTITY, o.UNIT_PRICE)
             orient_engine.command(order_item_make)
-            
+
         print("Zakończono dodawanie danych do OrientDB")
 
         print("Dodawanie połączeń w OrientDB")

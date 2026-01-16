@@ -156,5 +156,25 @@ def init_cassandra_schema(keyspace='my_keyspace', nodes=['127.0.0.1']):
     sync_table(InvoiceFullDetails)
     sync_table(SalesStatsByCountry)
     sync_table(CustomerLeaderboard)
+    sync_table(InvoicesByCustomerName)
+    sync_table(OrderItemsByProduct)
 
     print("Gotowe! Struktura Cassandry została zainicjowana.")
+
+
+
+# Tabela pomocnicza dla UPDATE po nazwie klienta
+class InvoicesByCustomerName(Model):
+    __table_name__ = 'invoices_by_customer_name'
+    customer_name = columns.Text(partition_key=True)
+    invoice_id = columns.Integer(primary_key=True)
+    total_amount = columns.Decimal()
+    status = columns.Text()
+
+# Tabela pomocnicza dla DELETE po ID produktu
+class OrderItemsByProduct(Model):
+    __table_name__ = 'order_items_by_product'
+    product_id = columns.Integer(partition_key=True)
+    invoice_id = columns.Integer(primary_key=True)
+    quantity = columns.Integer()
+    unit_price = columns.Decimal()

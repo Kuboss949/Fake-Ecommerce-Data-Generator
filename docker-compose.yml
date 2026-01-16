@@ -1,0 +1,100 @@
+version: '3.8'
+
+services:
+  # ==========================================
+  # 1. MariaDB (Budowana z Twojego Dockerfile)
+  # ==========================================
+  mariadb:
+    # Zamiast 'build' używamy 'image'.
+    # Wersja 11.4 jest stabilna i nowoczesna.
+    image: mariadb:11.4
+    container_name: erp_mariadb
+    environment:
+      MARIADB_ROOT_PASSWORD: my-secret-pw
+      MARIADB_DATABASE: company_db
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    restart: unless-stopped
+    # Opcjonalnie: command żeby upewnić się, że kodowanie jest UTF-8
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+
+  # ==========================================
+  # 2. OrientDB (Budowana z Twojego Dockerfile)
+  # ==========================================
+  orientdb:
+    build:
+      context: ./orientdb # Ścieżka do folderu z Dockerfile OrientDB
+      dockerfile: Dockerfile
+    container_name: erp_orientdb
+    environment:
+      # Uwaga: Twój Dockerfile OrientDB jest bardzo surowy i może nie obsługiwać
+      # automatycznego ustawiania hasła przez zmienną ENV bez dodatkowego skryptu.
+      # Jeśli hasło nie zadziała, OrientDB poprosi o nie w logach lub ustawi domyślne.
+      ORIENTDB_ROOT_PASSWORD: root
+    ports:
+      - "2424:2424"  # Port binarny (dla Pythona)
+      - "2480:2480"  # OrientDB Studio (przeglądarka)
+    volumes:
+      - orientdb_data:/orientdb/databases
+      - orientdb_config:/orientdb/config
+    restart: unless-stopped
+
+  # ==========================================
+  # 3. Firebird (Gotowy obraz - standard)
+  # ==========================================
+  firebird:
+    image: firebirdsql/firebird
+    restart: always
+    environment:
+      - FIREBIRD_ROOT_PASSWORD=admin123
+      - FIREBIRD_USER=alice
+      - FIREBIRD_PASSWORD=admin123
+      - FIREBIRD_DATABASE=mirror.fdb
+      - FIREBIRD_DATABASE_DEFAULT_CHARSET=UTF8
+    ports:
+      - "3050:3050"
+    volumes:
+      - ./data:/var/lib/firebird/data
+
+  # ==========================================
+  # 4. Cassandra (Gotowy obraz - standard)
+  # ==========================================
+
+  cassandra:
+    image: cassandra:latest # You can specify a version, e.g., cassandra:4.1.3
+    container_name: cassandra-node1
+    ports:
+      - "9042:9042"
+      - "7000:7000" # Intra-node communication
+      - "7001:7001" # SSL intra-node communication
+      - "7199:7199" # JMX
+    environment:
+      - CASSANDRA_CLUSTER_NAME=MyCassandraCluster # Name your cluster
+      - CASSANDRA_DC=datacenter1 # Define the datacenter
+      - CASSANDRA_RACK=rack1 # Define the rack
+      - CASSANDRA_SEEDS=cassandra # Point to itself as a seed in a single-node setup
+      # This is important for a single-node setup to avoid waiting for other nodes
+      - CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch
+    volumes:
+      - cassandra_data:/var/lib/cassandra # Persist Cassandra data
+      - cassandra_logs:/var/log/cassandra # Persist Cassandra logs
+      # Optional: Mount a custom cassandra.yaml if needed
+      # - ./cassandra.yaml:/etc/cassandra/cassandra.yaml
+    healthcheck:
+      test: [ "CMD", "cqlsh", "-u", "cassandra", "-p", "cassandra", "-e", "describe keyspaces;" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: always
+
+
+
+volumes:
+  mariadb_data:
+  orientdb_data:
+  orientdb_config:
+  cassandra_data:
+  cassandra_logs:

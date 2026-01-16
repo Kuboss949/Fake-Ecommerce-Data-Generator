@@ -1,4 +1,4 @@
-#import i inicjalizowanie połączenia z orient 1.5.6
+#import i inicjalizowanie połączenia z orientdb 1.5.6
 import pyorientdb as pyorient       
 orient_engine = pyorient.OrientDB("localhost", 2424)
 orient_engine.set_session_token(True)
