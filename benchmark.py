@@ -72,6 +72,67 @@ def connect_cassandra(keyspace='my_keyspace', nodes=['127.0.0.1']):
 
 
 # ==========================================
+# 🎲 FUNKCJE POBIERAJĄCE PRZYKŁADOWE WARTOŚCI
+# ==========================================
+
+def get_sample_values(fb_session, cassandra_session):
+    """
+    Pobiera przykładowe wartości z baz danych do użycia w zapytaniach parametryzowanych.
+
+    Returns:
+        dict: Słownik z przykładowymi wartościami
+    """
+    sample_values = {}
+
+    try:
+        # Pobierz przykładowe miasto z Firebird
+        result = fb_session.execute(text("SELECT CITY FROM CUSTOMER LIMIT 1"))
+        row = result.fetchone()
+        sample_values['city'] = row[0] if row else 'Warszawa'
+
+        # Pobierz przykładowy rok (z daty płatności)
+        result = fb_session.execute(text("SELECT EXTRACT(YEAR FROM PAYMENT_DATE) as year FROM PAYMENT LIMIT 1"))
+        row = result.fetchone()
+        sample_values['year'] = int(row[0]) if row else 2024
+
+        # Pobierz przykładowy kraj
+        result = fb_session.execute(text("SELECT COUNTRY FROM CUSTOMER LIMIT 1"))
+        row = result.fetchone()
+        sample_values['country'] = row[0] if row else 'Polska'
+
+        # Pobierz przykładowe invoice_id
+        result = fb_session.execute(text("SELECT INVOICE_ID FROM INVOICE LIMIT 1"))
+        row = result.fetchone()
+        sample_values['invoice_id'] = int(row[0]) if row else 1
+
+        # Pobierz przykładową nazwę klienta
+        result = fb_session.execute(text("SELECT NAME FROM CUSTOMER LIMIT 1"))
+        row = result.fetchone()
+        sample_values['customer_name'] = row[0] if row else 'Test Customer'
+
+        # Pobierz przykładowe product_id
+        result = fb_session.execute(text("SELECT PRODUCT_ID FROM PRODUCT LIMIT 1"))
+        row = result.fetchone()
+        sample_values['product_id'] = int(row[0]) if row else 1
+
+        print(f"   📋 Pobrano przykładowe wartości: city={sample_values['city']}, year={sample_values['year']}, country={sample_values['country']}")
+
+    except Exception as e:
+        print(f"   ⚠️ Błąd podczas pobierania przykładowych wartości: {e}")
+        # Domyślne wartości
+        sample_values = {
+            'city': 'Warszawa',
+            'year': 2024,
+            'country': 'Polska',
+            'invoice_id': 1,
+            'customer_name': 'Test Customer',
+            'product_id': 1
+        }
+
+    return sample_values
+
+
+# ==========================================
 # ⏱️ FUNKCJE BENCHMARKOWE
 # ==========================================
 
@@ -373,6 +434,9 @@ def run_select_benchmarks(fb_session, maria_session, orient_client, cassandra_se
     print("🔍 BENCHMARK: SELECT QUERIES")
     print("="*60)
 
+    # Pobierz przykładowe wartości do parametryzowanych zapytań
+    sample_values = get_sample_values(fb_session, cassandra_session)
+
     # Firebird SELECT
     print("\n🔥 Firebird SELECT:")
     for name, query in FB_SELECT.items():
@@ -394,17 +458,16 @@ def run_select_benchmarks(fb_session, maria_session, orient_client, cassandra_se
     # Cassandra SELECT - z podstawionymi parametrami
     print("\n👁️ Cassandra SELECT:")
 
-    # Dla Cassandry niektóre zapytania wymagają parametrów
-    cassandra_queries_with_params = {
-        "accountants": CQL_SELECT_QUERIES["accountants"],
-        # customers_in_city wymaga city - pomijamy lub użyjemy próbkowej
-        "products_low_price": CQL_SELECT_QUERIES["products_low_price"],
-        # Inne zapytania z parametrami pomijamy lub dodajemy przykładowe wartości
-    }
-
-    for name, query in cassandra_queries_with_params.items():
-        result = benchmark_cassandra_query(cassandra_session, name, query)
-        benchmark_results.append(result)
+    for name, query_template in CQL_SELECT_QUERIES.items():
+        try:
+            # Podstaw parametry do zapytania
+            query = query_template.format(**sample_values)
+            result = benchmark_cassandra_query(cassandra_session, name, query)
+            benchmark_results.append(result)
+        except KeyError as e:
+            print(f"   ⚠️ Pominięto {name} - brak parametru {e}")
+        except Exception as e:
+            print(f"   ⚠️ Błąd w {name}: {e}")
 
 
 def run_ddl_benchmarks(fb_session, maria_session, orient_client, cassandra_session):
@@ -444,6 +507,9 @@ def run_dml_benchmarks(fb_session, maria_session, orient_client, cassandra_sessi
     print("✏️ BENCHMARK: DML QUERIES (UPDATE/DELETE)")
     print("="*60)
 
+    # Pobierz przykładowe wartości do parametryzowanych zapytań
+    sample_values = get_sample_values(fb_session, cassandra_session)
+
     # Firebird DML
     print("\n🔥 Firebird DML:")
     for name, query in FB_DML.items():
@@ -464,14 +530,17 @@ def run_dml_benchmarks(fb_session, maria_session, orient_client, cassandra_sessi
 
     # Cassandra DML - z podstawionymi parametrami
     print("\n👁️ Cassandra DML:")
-    # Cassandra wymaga konkretnych ID - pomijamy lub dodajemy przykładowe
-    cassandra_dml_simple = {
-        "delete_all_products": CQL_DML_QUERIES["delete_all_products"]
-    }
 
-    for name, query in cassandra_dml_simple.items():
-        result = benchmark_cassandra_command(cassandra_session, name, query, "DML")
-        benchmark_results.append(result)
+    for name, query_template in CQL_DML_QUERIES.items():
+        try:
+            # Podstaw parametry do zapytania
+            query = query_template.format(**sample_values)
+            result = benchmark_cassandra_command(cassandra_session, name, query, "DML")
+            benchmark_results.append(result)
+        except KeyError as e:
+            print(f"   ⚠️ Pominięto {name} - brak parametru {e}")
+        except Exception as e:
+            print(f"   ⚠️ Błąd w {name}: {e}")
 
 
 # ==========================================
