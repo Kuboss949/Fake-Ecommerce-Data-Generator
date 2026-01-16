@@ -32,7 +32,7 @@ from cassandra_queries import (
 
 
 # ==========================================
-# ⏱️ EXECUTION TIMER - CONTEXT MANAGER
+# EXECUTION TIMER - CONTEXT MANAGER
 # ==========================================
 
 @contextmanager
@@ -44,35 +44,35 @@ def ExecutionTimer(name="Operation"):
         with ExecutionTimer("My operation"):
             # kod do zmierzenia
     """
-    print(f"⏱️  {name}...", end=" ", flush=True)
+    print(f"[TIMER] {name}...", end=" ", flush=True)
     start_time = time.time()
     yield
     end_time = time.time()
     elapsed = (end_time - start_time) * 1000  # ms
-    print(f"✅ {elapsed:.2f}ms")
+    print(f"OK {elapsed:.2f}ms")
 
 
 # ==========================================
-# 📊 BENCHMARK RESULTS STORAGE
+# BENCHMARK RESULTS STORAGE
 # ==========================================
 
 benchmark_results = []
 
 
 # ==========================================
-# 🔌 FUNKCJA DO POŁĄCZENIA Z CASSANDRĄ
+# FUNKCJA DO POLACZENIA Z CASSANDRA
 # ==========================================
 
 def connect_cassandra(keyspace='my_keyspace', nodes=['127.0.0.1']):
-    """Połączenie z Cassandra - tylko ta baza potrzebuje własnego połączenia"""
-    print("👁️ Łączenie z Cassandra...")
+    """Polaczenie z Cassandra - tylko ta baza potrzebuje wlasnego polaczenia"""
+    print("[Cassandra] Laczenie z Cassandra...")
     cluster = Cluster(nodes)
     session = cluster.connect(keyspace)
     return session, cluster
 
 
 # ==========================================
-# 🎲 FUNKCJE POBIERAJĄCE PRZYKŁADOWE WARTOŚCI
+# FUNKCJE POBIERAJACE PRZYKLADOWE WARTOSCI
 # ==========================================
 
 def get_sample_values(fb_session, cassandra_session):
@@ -85,40 +85,40 @@ def get_sample_values(fb_session, cassandra_session):
     sample_values = {}
 
     try:
-        # Pobierz przykładowe miasto z Firebird
-        result = fb_session.execute(text("SELECT CITY FROM CUSTOMER LIMIT 1"))
+        # Pobierz przykladowe miasto z Firebird (FIRST 1 zamiast LIMIT 1)
+        result = fb_session.execute(text("SELECT FIRST 1 CITY FROM CUSTOMER"))
         row = result.fetchone()
         sample_values['city'] = row[0] if row else 'Warszawa'
 
-        # Pobierz przykładowy rok (z daty płatności)
-        result = fb_session.execute(text("SELECT EXTRACT(YEAR FROM PAYMENT_DATE) as year FROM PAYMENT LIMIT 1"))
+        # Pobierz przykladowy rok (z daty platnosci)
+        result = fb_session.execute(text("SELECT FIRST 1 EXTRACT(YEAR FROM PAYMENT_DATE) as year FROM PAYMENT"))
         row = result.fetchone()
         sample_values['year'] = int(row[0]) if row else 2024
 
-        # Pobierz przykładowy kraj
-        result = fb_session.execute(text("SELECT COUNTRY FROM CUSTOMER LIMIT 1"))
+        # Pobierz przykladowy kraj
+        result = fb_session.execute(text("SELECT FIRST 1 COUNTRY FROM CUSTOMER"))
         row = result.fetchone()
         sample_values['country'] = row[0] if row else 'Polska'
 
-        # Pobierz przykładowe invoice_id
-        result = fb_session.execute(text("SELECT INVOICE_ID FROM INVOICE LIMIT 1"))
+        # Pobierz przykladowe invoice_id
+        result = fb_session.execute(text("SELECT FIRST 1 INVOICE_ID FROM INVOICE"))
         row = result.fetchone()
         sample_values['invoice_id'] = int(row[0]) if row else 1
 
-        # Pobierz przykładową nazwę klienta
-        result = fb_session.execute(text("SELECT NAME FROM CUSTOMER LIMIT 1"))
+        # Pobierz przykladowa nazwe klienta
+        result = fb_session.execute(text("SELECT FIRST 1 NAME FROM CUSTOMER"))
         row = result.fetchone()
         sample_values['customer_name'] = row[0] if row else 'Test Customer'
 
-        # Pobierz przykładowe product_id
-        result = fb_session.execute(text("SELECT PRODUCT_ID FROM PRODUCT LIMIT 1"))
+        # Pobierz przykladowe product_id
+        result = fb_session.execute(text("SELECT FIRST 1 PRODUCT_ID FROM PRODUCT"))
         row = result.fetchone()
         sample_values['product_id'] = int(row[0]) if row else 1
 
-        print(f"   📋 Pobrano przykładowe wartości: city={sample_values['city']}, year={sample_values['year']}, country={sample_values['country']}")
+        print(f"   Pobrano przykladowe wartosci: city={sample_values['city']}, year={sample_values['year']}, country={sample_values['country']}")
 
     except Exception as e:
-        print(f"   ⚠️ Błąd podczas pobierania przykładowych wartości: {e}")
+        print(f"   [WARN] Blad podczas pobierania przykladowych wartosci: {e}")
         # Domyślne wartości
         sample_values = {
             'city': 'Warszawa',
@@ -133,7 +133,7 @@ def get_sample_values(fb_session, cassandra_session):
 
 
 # ==========================================
-# ⏱️ FUNKCJE BENCHMARKOWE
+# FUNKCJE BENCHMARKOWE
 # ==========================================
 
 def benchmark_sql_query(session, query_name, query_text, db_name):
@@ -149,7 +149,7 @@ def benchmark_sql_query(session, query_name, query_text, db_name):
     Returns:
         Dict z wynikami benchmarku
     """
-    print(f"   📌 {db_name}: {query_name}...", end=" ")
+    print(f"   {db_name}: {query_name}...", end=" ")
 
     try:
         start_time = time.time()
@@ -160,7 +160,7 @@ def benchmark_sql_query(session, query_name, query_text, db_name):
         execution_time = (end_time - start_time) * 1000  # ms
         row_count = len(rows)
 
-        print(f"✅ {execution_time:.2f}ms ({row_count} rows)")
+        print(f"OK {execution_time:.2f}ms ({row_count} rows)")
 
         return {
             "database": db_name,
@@ -173,7 +173,7 @@ def benchmark_sql_query(session, query_name, query_text, db_name):
         }
 
     except Exception as e:
-        print(f"❌ ERROR: {str(e)[:50]}")
+        print(f"ERROR: {str(e)[:50]}")
         return {
             "database": db_name,
             "query_type": "SELECT",
@@ -199,7 +199,7 @@ def benchmark_sql_command(session, query_name, query_text, db_name, query_type="
     Returns:
         Dict z wynikami benchmarku
     """
-    print(f"   📌 {db_name}: {query_name}...", end=" ")
+    print(f"   {db_name}: {query_name}...", end=" ")
 
     try:
         start_time = time.time()
@@ -209,7 +209,7 @@ def benchmark_sql_command(session, query_name, query_text, db_name, query_type="
 
         execution_time = (end_time - start_time) * 1000  # ms
 
-        print(f"✅ {execution_time:.2f}ms")
+        print(f"OK {execution_time:.2f}ms")
 
         return {
             "database": db_name,
@@ -223,7 +223,7 @@ def benchmark_sql_command(session, query_name, query_text, db_name, query_type="
 
     except Exception as e:
         session.rollback()
-        print(f"❌ ERROR: {str(e)[:50]}")
+        print(f"ERROR: {str(e)[:50]}")
         return {
             "database": db_name,
             "query_type": query_type,
@@ -247,7 +247,7 @@ def benchmark_orient_query(client, query_name, query_text):
     Returns:
         Dict z wynikami benchmarku
     """
-    print(f"   📌 OrientDB: {query_name}...", end=" ")
+    print(f"   OrientDB: {query_name}...", end=" ")
 
     try:
         start_time = time.time()
@@ -257,7 +257,7 @@ def benchmark_orient_query(client, query_name, query_text):
         execution_time = (end_time - start_time) * 1000  # ms
         row_count = len(result)
 
-        print(f"✅ {execution_time:.2f}ms ({row_count} rows)")
+        print(f"OK {execution_time:.2f}ms ({row_count} rows)")
 
         return {
             "database": "OrientDB",
@@ -270,7 +270,7 @@ def benchmark_orient_query(client, query_name, query_text):
         }
 
     except Exception as e:
-        print(f"❌ ERROR: {str(e)[:50]}")
+        print(f"ERROR: {str(e)[:50]}")
         return {
             "database": "OrientDB",
             "query_type": "SELECT",
@@ -295,7 +295,7 @@ def benchmark_orient_command(client, query_name, query_text, query_type="DML"):
     Returns:
         Dict z wynikami benchmarku
     """
-    print(f"   📌 OrientDB: {query_name}...", end=" ")
+    print(f"   OrientDB: {query_name}...", end=" ")
 
     try:
         start_time = time.time()
@@ -304,7 +304,7 @@ def benchmark_orient_command(client, query_name, query_text, query_type="DML"):
 
         execution_time = (end_time - start_time) * 1000  # ms
 
-        print(f"✅ {execution_time:.2f}ms")
+        print(f"OK {execution_time:.2f}ms")
 
         return {
             "database": "OrientDB",
@@ -317,7 +317,7 @@ def benchmark_orient_command(client, query_name, query_text, query_type="DML"):
         }
 
     except Exception as e:
-        print(f"❌ ERROR: {str(e)[:50]}")
+        print(f"ERROR: {str(e)[:50]}")
         return {
             "database": "OrientDB",
             "query_type": query_type,
@@ -341,7 +341,7 @@ def benchmark_cassandra_query(session, query_name, query_text):
     Returns:
         Dict z wynikami benchmarku
     """
-    print(f"   📌 Cassandra: {query_name}...", end=" ")
+    print(f"   Cassandra: {query_name}...", end=" ")
 
     try:
         start_time = time.time()
@@ -352,7 +352,7 @@ def benchmark_cassandra_query(session, query_name, query_text):
         execution_time = (end_time - start_time) * 1000  # ms
         row_count = len(rows)
 
-        print(f"✅ {execution_time:.2f}ms ({row_count} rows)")
+        print(f"OK {execution_time:.2f}ms ({row_count} rows)")
 
         return {
             "database": "Cassandra",
@@ -365,7 +365,7 @@ def benchmark_cassandra_query(session, query_name, query_text):
         }
 
     except Exception as e:
-        print(f"❌ ERROR: {str(e)[:50]}")
+        print(f"ERROR: {str(e)[:50]}")
         return {
             "database": "Cassandra",
             "query_type": "SELECT",
@@ -390,7 +390,7 @@ def benchmark_cassandra_command(session, query_name, query_text, query_type="DML
     Returns:
         Dict z wynikami benchmarku
     """
-    print(f"   📌 Cassandra: {query_name}...", end=" ")
+    print(f"   Cassandra: {query_name}...", end=" ")
 
     try:
         start_time = time.time()
@@ -399,7 +399,7 @@ def benchmark_cassandra_command(session, query_name, query_text, query_type="DML
 
         execution_time = (end_time - start_time) * 1000  # ms
 
-        print(f"✅ {execution_time:.2f}ms")
+        print(f"OK {execution_time:.2f}ms")
 
         return {
             "database": "Cassandra",
@@ -412,7 +412,7 @@ def benchmark_cassandra_command(session, query_name, query_text, query_type="DML
         }
 
     except Exception as e:
-        print(f"❌ ERROR: {str(e)[:50]}")
+        print(f"ERROR: {str(e)[:50]}")
         return {
             "database": "Cassandra",
             "query_type": query_type,
@@ -425,38 +425,38 @@ def benchmark_cassandra_command(session, query_name, query_text, query_type="DML
 
 
 # ==========================================
-# 🎯 FUNKCJE GŁÓWNE BENCHMARKU
+# FUNKCJE GLOWNE BENCHMARKU
 # ==========================================
 
 def run_select_benchmarks(fb_session, maria_session, orient_client, cassandra_session):
-    """Uruchamia benchmarki dla zapytań SELECT"""
+    """Uruchamia benchmarki dla zapytan SELECT"""
     print("\n" + "="*60)
-    print("🔍 BENCHMARK: SELECT QUERIES")
+    print("BENCHMARK: SELECT QUERIES")
     print("="*60)
 
     # Pobierz przykładowe wartości do parametryzowanych zapytań
     sample_values = get_sample_values(fb_session, cassandra_session)
 
     # Firebird SELECT
-    print("\n🔥 Firebird SELECT:")
+    print("\n[Firebird] SELECT:")
     for name, query in FB_SELECT.items():
         result = benchmark_sql_query(fb_session, name, query, "Firebird")
         benchmark_results.append(result)
 
     # MariaDB SELECT
-    print("\n🐬 MariaDB SELECT:")
+    print("\n[MariaDB] SELECT:")
     for name, query in MARIA_SELECT.items():
         result = benchmark_sql_query(maria_session, name, query, "MariaDB")
         benchmark_results.append(result)
 
     # OrientDB SELECT
-    print("\n🥑 OrientDB SELECT:")
+    print("\n[OrientDB] SELECT:")
     for name, query in ORIENT_SELECT_QUERIES.items():
         result = benchmark_orient_query(orient_client, name, query)
         benchmark_results.append(result)
 
     # Cassandra SELECT - z podstawionymi parametrami
-    print("\n👁️ Cassandra SELECT:")
+    print("\n[Cassandra] SELECT:")
 
     for name, query_template in CQL_SELECT_QUERIES.items():
         try:
@@ -465,71 +465,71 @@ def run_select_benchmarks(fb_session, maria_session, orient_client, cassandra_se
             result = benchmark_cassandra_query(cassandra_session, name, query)
             benchmark_results.append(result)
         except KeyError as e:
-            print(f"   ⚠️ Pominięto {name} - brak parametru {e}")
+            print(f"   [WARN] Pominieto {name} - brak parametru {e}")
         except Exception as e:
-            print(f"   ⚠️ Błąd w {name}: {e}")
+            print(f"   [WARN] Blad w {name}: {e}")
 
 
 def run_ddl_benchmarks(fb_session, maria_session, orient_client, cassandra_session):
-    """Uruchamia benchmarki dla zapytań DDL (ALTER TABLE)"""
+    """Uruchamia benchmarki dla zapytan DDL (ALTER TABLE)"""
     print("\n" + "="*60)
-    print("🛠️ BENCHMARK: DDL QUERIES (ALTER TABLE)")
+    print("BENCHMARK: DDL QUERIES (ALTER TABLE)")
     print("="*60)
 
     # Firebird DDL
-    print("\n🔥 Firebird DDL:")
+    print("\n[Firebird] DDL:")
     for name, query in FB_DDL.items():
         result = benchmark_sql_command(fb_session, name, query, "Firebird", "DDL")
         benchmark_results.append(result)
 
     # MariaDB DDL
-    print("\n🐬 MariaDB DDL:")
+    print("\n[MariaDB] DDL:")
     for name, query in MARIA_DDL.items():
         result = benchmark_sql_command(maria_session, name, query, "MariaDB", "DDL")
         benchmark_results.append(result)
 
     # OrientDB DDL
-    print("\n🥑 OrientDB DDL:")
+    print("\n[OrientDB] DDL:")
     for name, query in ORIENT_DDL_QUERIES.items():
         result = benchmark_orient_command(orient_client, name, query, "DDL")
         benchmark_results.append(result)
 
     # Cassandra DDL
-    print("\n👁️ Cassandra DDL:")
+    print("\n[Cassandra] DDL:")
     for name, query in CQL_DDL_QUERIES.items():
         result = benchmark_cassandra_command(cassandra_session, name, query, "DDL")
         benchmark_results.append(result)
 
 
 def run_dml_benchmarks(fb_session, maria_session, orient_client, cassandra_session):
-    """Uruchamia benchmarki dla zapytań DML (UPDATE/DELETE)"""
+    """Uruchamia benchmarki dla zapytan DML (UPDATE/DELETE)"""
     print("\n" + "="*60)
-    print("✏️ BENCHMARK: DML QUERIES (UPDATE/DELETE)")
+    print("BENCHMARK: DML QUERIES (UPDATE/DELETE)")
     print("="*60)
 
     # Pobierz przykładowe wartości do parametryzowanych zapytań
     sample_values = get_sample_values(fb_session, cassandra_session)
 
     # Firebird DML
-    print("\n🔥 Firebird DML:")
+    print("\n[Firebird] DML:")
     for name, query in FB_DML.items():
         result = benchmark_sql_command(fb_session, name, query, "Firebird", "DML")
         benchmark_results.append(result)
 
     # MariaDB DML
-    print("\n🐬 MariaDB DML:")
+    print("\n[MariaDB] DML:")
     for name, query in MARIA_DML.items():
         result = benchmark_sql_command(maria_session, name, query, "MariaDB", "DML")
         benchmark_results.append(result)
 
     # OrientDB DML
-    print("\n🥑 OrientDB DML:")
+    print("\n[OrientDB] DML:")
     for name, query in ORIENT_DML_QUERIES.items():
         result = benchmark_orient_command(orient_client, name, query, "DML")
         benchmark_results.append(result)
 
     # Cassandra DML - z podstawionymi parametrami
-    print("\n👁️ Cassandra DML:")
+    print("\n[Cassandra] DML:")
 
     for name, query_template in CQL_DML_QUERIES.items():
         try:
@@ -538,13 +538,13 @@ def run_dml_benchmarks(fb_session, maria_session, orient_client, cassandra_sessi
             result = benchmark_cassandra_command(cassandra_session, name, query, "DML")
             benchmark_results.append(result)
         except KeyError as e:
-            print(f"   ⚠️ Pominięto {name} - brak parametru {e}")
+            print(f"   [WARN] Pominieto {name} - brak parametru {e}")
         except Exception as e:
-            print(f"   ⚠️ Błąd w {name}: {e}")
+            print(f"   [WARN] Blad w {name}: {e}")
 
 
 # ==========================================
-# 💾 FUNKCJE ZAPISU WYNIKÓW
+# FUNKCJE ZAPISU WYNIKOW
 # ==========================================
 
 def save_results_to_csv():
@@ -557,7 +557,7 @@ def save_results_to_csv():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"benchmark_results_{timestamp}.csv"
 
-    print(f"\n💾 Zapisywanie wyników do: {filename}")
+    print(f"\n[SAVE] Zapisywanie wynikow do: {filename}")
 
     fieldnames = [
         "database",
@@ -574,14 +574,14 @@ def save_results_to_csv():
         writer.writeheader()
         writer.writerows(benchmark_results)
 
-    print(f"✅ Zapisano {len(benchmark_results)} wyników do {filename}")
+    print(f"OK Zapisano {len(benchmark_results)} wynikow do {filename}")
     return filename
 
 
 def print_summary():
-    """Wyświetla podsumowanie wyników benchmarku"""
+    """Wyswietla podsumowanie wynikow benchmarku"""
     print("\n" + "="*60)
-    print("📊 PODSUMOWANIE BENCHMARKU")
+    print("PODSUMOWANIE BENCHMARKU")
     print("="*60)
 
     databases = set(r["database"] for r in benchmark_results)
@@ -598,14 +598,14 @@ def print_summary():
                 avg_time = sum(times) / len(times)
 
         print(f"\n{db}:")
-        print(f"   ✅ Sukces: {success_count}")
-        print(f"   ❌ Błędy: {error_count}")
+        print(f"   Sukces: {success_count}")
+        print(f"   Bledy: {error_count}")
         if avg_time:
-            print(f"   ⏱️ Średni czas: {avg_time:.2f}ms")
+            print(f"   Sredni czas: {avg_time:.2f}ms")
 
 
 # ==========================================
-# 🚀 MAIN
+# MAIN
 # ==========================================
 
 def run_benchmark(fb_session, maria_session, orient_client):
@@ -621,7 +621,7 @@ def run_benchmark(fb_session, maria_session, orient_client):
         str: Ścieżka do pliku CSV z wynikami
     """
     print("\n" + "="*60)
-    print("🏁 BENCHMARK BAZ DANYCH - START")
+    print("BENCHMARK BAZ DANYCH - START")
     print("="*60)
 
     # Połączenie tylko z Cassandrą (inne sesje są z parametrów)
@@ -643,24 +643,24 @@ def run_benchmark(fb_session, maria_session, orient_client):
         csv_path = save_results_to_csv()
 
         print("\n" + "="*60)
-        print("🏁 BENCHMARK BAZ DANYCH - KONIEC")
+        print("BENCHMARK BAZ DANYCH - KONIEC")
         print("="*60)
 
         return csv_path
 
     except Exception as e:
-        print(f"\n❌ KRYTYCZNY BŁĄD: {e}")
+        print(f"\n[ERROR] KRYTYCZNY BLAD: {e}")
         import traceback
         traceback.print_exc()
         return None
 
     finally:
-        # Zamknięcie tylko Cassandry (inne sesje są zarządzane w main.py)
-        print("\n🔒 Zamykanie połączenia Cassandra...")
+        # Zamkniecie tylko Cassandry (inne sesje sa zarzadzane w main.py)
+        print("\n[Cassandra] Zamykanie polaczenia...")
         cassandra_session.shutdown()
         cassandra_cluster.shutdown()
 
 
 if __name__ == "__main__":
-    print("❌ Ten skrypt powinien być wywoływany z main.py, nie bezpośrednio!")
-    print("Użyj: python main.py")
+    print("[ERROR] Ten skrypt powinien byc wywolywany z main.py, nie bezposrednio!")
+    print("Uzyj: python main.py")

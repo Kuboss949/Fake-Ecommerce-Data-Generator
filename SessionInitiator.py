@@ -44,7 +44,7 @@ class SessionInitiator:
         DB_USER = 'root'
         DB_PASS = 'root'
 
-        print(f"🥑 [OrientDB] Łączenie z bazą '{DB_NAME}'...")
+        print(f"[OrientDB] Laczenie z baza '{DB_NAME}'...")
         try:
             orient_client = pyorient.OrientDB("localhost", 2424)
             orient_client.connect(DB_USER, DB_PASS)
@@ -94,11 +94,11 @@ class SessionInitiator:
             return orient_client  # ZWRACAMY KLIENTA!
 
         except Exception as e:
-            print(f"❌ Błąd OrientDB: {e}")
+            print(f"[ERROR] Blad OrientDB: {e}")
             raise e
 
     def initiate_cassandra(self):
-        print("👁️ [Cassandra] Inicjalizacja keyspace i tabel...")
+        print("[Cassandra] Inicjalizacja keyspace i tabel...")
 
         if self.drop_data:
             print("Usuwanie struktury Cassandra...")

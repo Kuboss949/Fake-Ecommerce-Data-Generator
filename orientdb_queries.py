@@ -10,7 +10,7 @@ Wykorzystujemy krawędzie (edges) do wydajniejszych zapytań grafowych.
 FETCH_LIMIT = 100
 
 # ==========================================
-# 🔍 ZAPYTANIA ODCZYTUJĄCE (SELECT)
+# ZAPYTANIA ODCZYTUJACE (SELECT)
 # ==========================================
 ORIENT_SELECT_QUERIES = {
     "accountants": "SELECT NAME, EMAIL FROM SYS_USER WHERE ROLE = 'ACCOUNTANT'",
@@ -36,16 +36,17 @@ ORIENT_SELECT_QUERIES = {
                                    GROUP BY c.COUNTRY, p.NAME
                                    ORDER BY c.COUNTRY ASC, Laczna_Ilosc_Sztuk DESC""",
 
-    # Złożony raport sprzedażowy - pełna moc grafowych zapytań
-    "complex_sales_report": """MATCH {class: CUSTOMER, as: c} -Customer_to_order-> {class: CUSTOMER_ORDER, as: co, where: (STATUS = 'COMPLETED')} -Order_to_order_item-> {class: ORDER_ITEM, as: oi} <-Product_to_order_item- {class: PRODUCT, as: p}, {as: co} -Order_to_invoice-> {class: INVOICE, as: i} -Invoice_to_payment-> {class: PAYMENT, as: pay, where: (CONFIRMED = 1)}, {as: i} <-User_to_invoice- {class: SYS_USER, as: u}
-                            RETURN c.NAME AS Nazwa_Klienta, c.COUNTRY AS Kraj, u.USERNAME AS Agent, COUNT(DISTINCT(co.ORDER_ID)) AS Liczba_Zrealizowanych_Zamowien, COUNT(DISTINCT(p.PRODUCT_ID)) AS Liczba_Unikalnych_Produktow, SUM(oi.QUANTITY) AS Laczna_Ilosc_Sztuk, SUM(oi.QUANTITY * oi.UNIT_PRICE) AS Wartosc_Zamowien_Brutto, MAX(i.ISSUE_DATE) AS Data_Ostatniej_Faktury
-                            GROUP BY c.NAME, c.COUNTRY, u.USERNAME
-                            HAVING SUM(oi.QUANTITY) > 10
-                            ORDER BY Wartosc_Zamowien_Brutto DESC"""
+    # Zlozony raport sprzedazowy - MATCH w OrientDB nie wspiera HAVING,
+    # wiec uzywamy zagniezdzonego SELECT z WHERE
+    "complex_sales_report": """SELECT FROM (
+        MATCH {class: CUSTOMER, as: c} -Customer_to_order-> {class: CUSTOMER_ORDER, as: co, where: (STATUS = 'COMPLETED')} -Order_to_order_item-> {class: ORDER_ITEM, as: oi} <-Product_to_order_item- {class: PRODUCT, as: p}, {as: co} -Order_to_invoice-> {class: INVOICE, as: i} -Invoice_to_payment-> {class: PAYMENT, as: pay, where: (CONFIRMED = 1)}, {as: i} <-User_to_invoice- {class: SYS_USER, as: u}
+        RETURN c.NAME AS Nazwa_Klienta, c.COUNTRY AS Kraj, u.USERNAME AS Agent, COUNT(DISTINCT(co.ORDER_ID)) AS Liczba_Zrealizowanych_Zamowien, COUNT(DISTINCT(p.PRODUCT_ID)) AS Liczba_Unikalnych_Produktow, SUM(oi.QUANTITY) AS Laczna_Ilosc_Sztuk, SUM(oi.QUANTITY * oi.UNIT_PRICE) AS Wartosc_Zamowien_Brutto, MAX(i.ISSUE_DATE) AS Data_Ostatniej_Faktury
+        GROUP BY c.NAME, c.COUNTRY, u.USERNAME
+    ) WHERE Laczna_Ilosc_Sztuk > 10 ORDER BY Wartosc_Zamowien_Brutto DESC"""
 }
 
 # ==========================================
-# 🛠️ ZAPYTANIA MODYFIKUJĄCE STRUKTURĘ (DDL)
+# ZAPYTANIA MODYFIKUJACE STRUKTURE (DDL)
 # ==========================================
 # Uwaga: OrientDB pozwala na dodawanie pól dynamicznie (schemaless),
 # więc ALTER TABLE nie jest zawsze konieczny
@@ -56,7 +57,7 @@ ORIENT_DDL_QUERIES = {
 }
 
 # ==========================================
-# ✏️ ZAPYTANIA AKTUALIZUJĄCE (UPDATE/DELETE)
+# ZAPYTANIA AKTUALIZUJACE (UPDATE/DELETE)
 # ==========================================
 ORIENT_DML_QUERIES = {
     "mark_past_due": "UPDATE INVOICE SET PAST_DUE = 1 WHERE DUE_DATE < '2023-12-31'",
@@ -64,13 +65,16 @@ ORIENT_DML_QUERIES = {
     # UPDATE z wykorzystaniem MATCH (grafowe zapytania)
     "reset_amount_for_apolonia": """UPDATE CUSTOMER_ORDER MERGE {'TOTAL_AMOUNT': 0} WHERE @rid IN (SELECT expand(o) FROM (MATCH {class: CUSTOMER, as: c, where: (NAME = 'Apolonia Banak')} -Customer_to_order-> {class: CUSTOMER_ORDER, as: o} RETURN o))""",
 
-    "delete_specific_item": "DELETE VERTEX FROM ORDER_ITEM WHERE PRODUCT_ID = 2",
+    "delete_specific_item": "DELETE VERTEX ORDER_ITEM WHERE PRODUCT_ID = 2",
 
-    "delete_all_products": "DELETE VERTEX FROM PRODUCT"
+    # Najpierw usuwamy powiazane ORDER_ITEM, potem PRODUCT
+    "delete_order_items_for_products": "DELETE VERTEX ORDER_ITEM",
+
+    "delete_all_products": "DELETE VERTEX PRODUCT"
 }
 
 # ==========================================
-# 📊 POMOCNICZE FUNKCJE
+# POMOCNICZE FUNKCJE
 # ==========================================
 
 def execute_orient_query(client, query, fetch_plan="*:-1"):
@@ -91,7 +95,7 @@ def execute_orient_query(client, query, fetch_plan="*:-1"):
         result = client.query(clean_query, FETCH_LIMIT, fetch_plan)
         return result if result is not None else []
     except Exception as e:
-        print(f"   ⚠️ Błąd execute_orient_query: {e}")
+        print(f"   [WARN] Blad execute_orient_query: {e}")
         raise e
 
 
@@ -111,5 +115,5 @@ def execute_orient_command(client, command):
         clean_command = " ".join(command.split())
         return client.command(clean_command)
     except Exception as e:
-        print(f"   ⚠️ Błąd execute_orient_command: {e}")
+        print(f"   [WARN] Blad execute_orient_command: {e}")
         raise e

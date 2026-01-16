@@ -7,7 +7,7 @@ Bez tego zapytania będą wymagały 'ALLOW FILTERING', co jest zabójcze dla wyd
 """
 
 # ==========================================
-# 🔍 ZAPYTANIA ODCZYTUJĄCE (SELECT)
+# ZAPYTANIA ODCZYTUJACE (SELECT)
 # ==========================================
 CQL_SELECT_QUERIES = {
     # SQL: SELECT ... FROM SYS_USER WHERE ROLE = 'ACCOUNTANT'
@@ -72,9 +72,10 @@ CQL_SELECT_QUERIES = {
 }
 
 # ==========================================
-# 🛠️ ZAPYTANIA MODYFIKUJĄCE STRUKTURĘ (DDL)
+# ZAPYTANIA MODYFIKUJACE STRUKTURE (DDL)
 # ==========================================
 CQL_DDL_QUERIES = {
+    # Cassandra nie wspiera IF NOT EXISTS dla ADD, wiec ignorujemy blad jesli kolumna istnieje
     "add_column_past_due": """
                            ALTER TABLE invoice_full_details
                                ADD past_due boolean
@@ -82,7 +83,7 @@ CQL_DDL_QUERIES = {
 }
 
 # ==========================================
-# ✏️ ZAPYTANIA AKTUALIZUJĄCE I KASUJĄCE
+# ZAPYTANIA AKTUALIZUJACE I KASUJACE
 # ==========================================
 # W Cassandrze nie ma "UPDATE ... WHERE data < ..." dla całej tabeli.
 # Musisz pobrać ID w aplikacji i aktualizować po ID.
@@ -125,7 +126,12 @@ CQL_DML_QUERIES = {
                                AND invoice_id = {invoice_id}
                              """,
 
-    # 4. DELETE ALL PRODUCTS
+    # 4. Najpierw usuwamy powiazane ORDER_ITEM (Cassandra: TRUNCATE tabeli)
+    "delete_order_items_for_products": """
+        TRUNCATE order_items_by_product
+    """,
+
+    # 5. DELETE ALL PRODUCTS
     "delete_all_products": """
         TRUNCATE products_by_price
     """

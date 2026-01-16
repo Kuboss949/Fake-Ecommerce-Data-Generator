@@ -6,7 +6,7 @@ Placeholder'y w nawiasach klamrowych {} są przeznaczone do użycia z metodą .f
 """
 
 # ==========================================
-# 🔍 ZAPYTANIA ODCZYTUJĄCE (SELECT)
+# ZAPYTANIA ODCZYTUJACE (SELECT)
 # ==========================================
 SELECT_QUERIES = {
     "accountants": """
@@ -89,7 +89,7 @@ SELECT_QUERIES = {
 }
 
 # ==========================================
-# 🛠️ ZAPYTANIA MODYFIKUJĄCE STRUKTURĘ (DDL)
+# ZAPYTANIA MODYFIKUJACE STRUKTURE (DDL)
 # ==========================================
 DDL_QUERIES = {
     # W MariaDB 'BOOL' to synonim TINYINT(1). Dodałem DEFAULT 0 dla czystości danych.
@@ -100,7 +100,7 @@ DDL_QUERIES = {
 }
 
 # ==========================================
-# ✏️ ZAPYTANIA AKTUALIZUJĄCE (UPDATE/DELETE)
+# ZAPYTANIA AKTUALIZUJACE (UPDATE/DELETE)
 # ==========================================
 DML_QUERIES = {
     "mark_past_due": """
@@ -124,6 +124,11 @@ DML_QUERIES = {
                             WHERE PRODUCT_ID = 2
                             """,
 
+    # Najpierw usuwamy powiazane ORDER_ITEM, potem PRODUCT
+    "delete_order_items_for_products": """
+                           DELETE FROM ORDER_ITEM
+                           """,
+
     "delete_all_products": """
                            DELETE
                            FROM PRODUCT
@@ -131,7 +136,7 @@ DML_QUERIES = {
 }
 
 # ==========================================
-# ➕ INSERTY Z PLACEHOLDERAMI
+# INSERTY Z PLACEHOLDERAMI
 # ==========================================
 # Użycie: INSERT_TEMPLATES['customer'].format(name="Jan", email="jan@o2.pl", ...)
 

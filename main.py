@@ -14,13 +14,13 @@ init = SessionInitiator(drop_data=True)
 
 def main():
     print("="*70)
-    print("🚀 SYSTEM GENEROWANIA DANYCH I BENCHMARKU BAZ DANYCH")
+    print("SYSTEM GENEROWANIA DANYCH I BENCHMARKU BAZ DANYCH")
     print("="*70)
 
     # ==========================================
-    # 🔧 INICJALIZACJA BAZ DANYCH
+    # INICJALIZACJA BAZ DANYCH
     # ==========================================
-    print("\n📌 FAZA 1: INICJALIZACJA BAZ DANYCH")
+    print("\n[FAZA 1] INICJALIZACJA BAZ DANYCH")
     print("-"*70)
 
     with ExecutionTimer("Inicjalizacja Firebird"):
@@ -36,9 +36,9 @@ def main():
         init.initiate_cassandra()
 
     # ==========================================
-    # 🎲 GENEROWANIE DANYCH
+    # GENEROWANIE DANYCH
     # ==========================================
-    print("\n📌 FAZA 2: GENEROWANIE DANYCH")
+    print("\n[FAZA 2] GENEROWANIE DANYCH")
     print("-"*70)
 
     generator = FakeDataGenerator(
@@ -55,9 +55,9 @@ def main():
         )
 
     # ==========================================
-    # 📊 BENCHMARK BAZ DANYCH
+    # BENCHMARK BAZ DANYCH
     # ==========================================
-    print("\n📌 FAZA 3: BENCHMARK WYDAJNOŚCI")
+    print("\n[FAZA 3] BENCHMARK WYDAJNOSCI")
     print("-"*70)
 
     csv_path = run_benchmark(
@@ -67,14 +67,14 @@ def main():
     )
 
     # ==========================================
-    # ✅ PODSUMOWANIE
+    # PODSUMOWANIE
     # ==========================================
     print("\n" + "="*70)
-    print("✅ WSZYSTKIE OPERACJE ZAKOŃCZONE POMYŚLNIE")
+    print("WSZYSTKIE OPERACJE ZAKONCZONE POMYSLNIE")
     print("="*70)
     if csv_path:
-        print(f"📄 Wyniki benchmarku zapisane w: {csv_path}")
-    print("🔒 Sesje pozostają otwarte dla dalszych testów.")
+        print(f"Wyniki benchmarku zapisane w: {csv_path}")
+    print("Sesje pozostaja otwarte dla dalszych testow.")
     print("="*70)
 
 
