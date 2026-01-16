@@ -522,8 +522,8 @@ class FakeDataGenerator:
             print(f"❌ BŁĄD: {e}")
             self.session.rollback()
             # mirror_session rollback jest robiony wewnątrz funkcji replicate
-        finally:
-            self.session.close()
-            self.mirror_session.close()
-            self.orient_client.db_close()
-            print("🔒 Wszystkie połączenia zamknięte.")
+        # finally:
+        #     self.session.close()
+        #     self.mirror_session.close()
+        #     self.orient_client.db_close()
+        #     print("🔒 Wszystkie połączenia zamknięte.")

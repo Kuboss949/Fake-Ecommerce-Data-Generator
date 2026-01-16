@@ -1,11 +1,4 @@
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import sessionmaker
-
-from FakeDataGenerator import FakeDataGenerator
 from SessionInitiator import SessionInitiator
-from modele import Base, SysUser, Customer, Product, CustomerOrder, OrderItem, Invoice, Payment
-from datetime import date, datetime
-import encodings
 import codecs
 # rejestracja kodowania cp1250, wyrzucało błąd dla firebirda
 try:
@@ -13,9 +6,6 @@ try:
 except LookupError:
     import encodings.cp1250
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from modele import Base
 from FakeDataGenerator import FakeDataGenerator
 
 
