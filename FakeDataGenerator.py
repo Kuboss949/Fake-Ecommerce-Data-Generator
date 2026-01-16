@@ -519,57 +519,85 @@ class FakeDataGenerator:
             print("      -> Customer_to_invoice...")
             customers_result = self.orient_client.command("SELECT FROM CUSTOMER")
             for c in customers_result:
-                self.orient_client.command(
-                    f"CREATE EDGE Customer_to_invoice FROM (SELECT FROM CUSTOMER WHERE CUSTOMER_ID = {c.oRecordData['CUSTOMER_ID']}) TO (SELECT FROM INVOICE WHERE CUSTOMER_ID = {c.oRecordData['CUSTOMER_ID']})"
-                )
+                try:
+                    self.orient_client.command(
+                        f"CREATE EDGE Customer_to_invoice FROM (SELECT FROM CUSTOMER WHERE CUSTOMER_ID = {c.oRecordData['CUSTOMER_ID']}) TO (SELECT FROM INVOICE WHERE CUSTOMER_ID = {c.oRecordData['CUSTOMER_ID']})"
+                    )
+                except:
+                    # Klient może nie mieć faktur, pomijamy
+                    pass
 
             # Invoice -> Payment
             print("      -> Invoice_to_payment...")
             invoices_result = self.orient_client.command("SELECT FROM INVOICE")
             for i in invoices_result:
-                self.orient_client.command(
-                    f"CREATE EDGE Invoice_to_payment FROM (SELECT FROM INVOICE WHERE INVOICE_ID = {i.oRecordData['INVOICE_ID']}) TO (SELECT FROM PAYMENT WHERE INVOICE_ID = {i.oRecordData['INVOICE_ID']})"
-                )
+                try:
+                    self.orient_client.command(
+                        f"CREATE EDGE Invoice_to_payment FROM (SELECT FROM INVOICE WHERE INVOICE_ID = {i.oRecordData['INVOICE_ID']}) TO (SELECT FROM PAYMENT WHERE INVOICE_ID = {i.oRecordData['INVOICE_ID']})"
+                    )
+                except:
+                    # Faktura może nie mieć płatności, pomijamy
+                    pass
 
             # Customer -> Order
             print("      -> Customer_to_order...")
             customers_result = self.orient_client.command("SELECT FROM CUSTOMER")
             for c in customers_result:
-                self.orient_client.command(
-                    f"CREATE EDGE Customer_to_order FROM (SELECT FROM CUSTOMER WHERE CUSTOMER_ID = {c.oRecordData['CUSTOMER_ID']}) TO (SELECT FROM CUSTOMER_ORDER WHERE CUSTOMER_ID = {c.oRecordData['CUSTOMER_ID']})"
-                )
+                try:
+                    self.orient_client.command(
+                        f"CREATE EDGE Customer_to_order FROM (SELECT FROM CUSTOMER WHERE CUSTOMER_ID = {c.oRecordData['CUSTOMER_ID']}) TO (SELECT FROM CUSTOMER_ORDER WHERE CUSTOMER_ID = {c.oRecordData['CUSTOMER_ID']})"
+                    )
+                except:
+                    # Klient może nie mieć zamówień, pomijamy
+                    pass
 
             # Order -> Invoice
             print("      -> Order_to_invoice...")
             orders_result = self.orient_client.command("SELECT FROM CUSTOMER_ORDER")
             for o in orders_result:
-                self.orient_client.command(
-                    f"CREATE EDGE Order_to_invoice FROM (SELECT FROM CUSTOMER_ORDER WHERE ORDER_ID = {o.oRecordData['ORDER_ID']}) TO (SELECT FROM INVOICE WHERE ORDER_ID = {o.oRecordData['ORDER_ID']})"
-                )
+                try:
+                    self.orient_client.command(
+                        f"CREATE EDGE Order_to_invoice FROM (SELECT FROM CUSTOMER_ORDER WHERE ORDER_ID = {o.oRecordData['ORDER_ID']}) TO (SELECT FROM INVOICE WHERE ORDER_ID = {o.oRecordData['ORDER_ID']})"
+                    )
+                except:
+                    # Zamówienie może nie mieć faktury, pomijamy
+                    pass
 
             # User -> Invoice
             print("      -> User_to_invoice...")
             users_result = self.orient_client.command("SELECT FROM SYS_USER")
             for u in users_result:
-                self.orient_client.command(
-                    f"CREATE EDGE User_to_invoice FROM (SELECT FROM SYS_USER WHERE USER_ID = {u.oRecordData['USER_ID']}) TO (SELECT FROM INVOICE WHERE CREATED_BY = {u.oRecordData['USER_ID']})"
-                )
+                try:
+                    self.orient_client.command(
+                        f"CREATE EDGE User_to_invoice FROM (SELECT FROM SYS_USER WHERE USER_ID = {u.oRecordData['USER_ID']}) TO (SELECT FROM INVOICE WHERE CREATED_BY = {u.oRecordData['USER_ID']})"
+                    )
+                except:
+                    # User może nie mieć faktur, pomijamy
+                    pass
 
             # Order -> Order_Item
             print("      -> Order_to_order_item...")
             orders_result = self.orient_client.command("SELECT FROM CUSTOMER_ORDER")
             for o in orders_result:
-                self.orient_client.command(
-                    f"CREATE EDGE Order_to_order_item FROM (SELECT FROM CUSTOMER_ORDER WHERE ORDER_ID = {o.oRecordData['ORDER_ID']}) TO (SELECT FROM ORDER_ITEM WHERE ORDER_ID = {o.oRecordData['ORDER_ID']})"
-                )
+                try:
+                    self.orient_client.command(
+                        f"CREATE EDGE Order_to_order_item FROM (SELECT FROM CUSTOMER_ORDER WHERE ORDER_ID = {o.oRecordData['ORDER_ID']}) TO (SELECT FROM ORDER_ITEM WHERE ORDER_ID = {o.oRecordData['ORDER_ID']})"
+                    )
+                except:
+                    # Zamówienie może nie mieć pozycji, pomijamy
+                    pass
 
             # Product -> Order_Item
             print("      -> Product_to_order_item...")
             products_result = self.orient_client.command("SELECT FROM PRODUCT")
             for p in products_result:
-                self.orient_client.command(
-                    f"CREATE EDGE Product_to_order_item FROM (SELECT FROM PRODUCT WHERE PRODUCT_ID = {p.oRecordData['PRODUCT_ID']}) TO (SELECT FROM ORDER_ITEM WHERE PRODUCT_ID = {p.oRecordData['PRODUCT_ID']})"
-                )
+                try:
+                    self.orient_client.command(
+                        f"CREATE EDGE Product_to_order_item FROM (SELECT FROM PRODUCT WHERE PRODUCT_ID = {p.oRecordData['PRODUCT_ID']}) TO (SELECT FROM ORDER_ITEM WHERE PRODUCT_ID = {p.oRecordData['PRODUCT_ID']})"
+                    )
+                except:
+                    # Produkt może nie być w zamówieniach, pomijamy
+                    pass
 
             print("✅ Replikacja do OrientDB zakończona sukcesem!")
 
