@@ -18,55 +18,21 @@ from cassandra_tables import (
 
 from modele import Base, SysUser, Customer, Product, CustomerOrder, OrderItem, Invoice, Payment
 
-#import i inicjalizowanie połączenia z orientdb 1.5.6
-import pyorientdb as pyorient
-
-DB_NAME = 'company'
-DB_USER = 'root'
-DB_PASS = 'root'
-
-try:
-    # 1. Połączenie z serwerem
-    orient_engine = pyorient.OrientDB("localhost", 2424)
-    orient_session = orient_engine.connect(DB_USER, DB_PASS)
-
-    # 2. TWARDY RESET - Jeśli baza istnieje, usuwamy ją!
-    if orient_engine.db_exists(DB_NAME, pyorient.STORAGE_TYPE_PLOCAL):
-        print(f"Baza '{DB_NAME}' istnieje. Usuwam ją (DROP)...")
-        orient_engine.db_drop(DB_NAME)
-
-    # 3. Tworzymy świeżą, pustą bazę
-    print(f"Tworzę nową bazę '{DB_NAME}'...")
-    orient_engine.db_create(DB_NAME, pyorient.DB_TYPE_GRAPH, pyorient.STORAGE_TYPE_PLOCAL)
-
-    # 4. Otwarcie bazy
-    orient_engine.db_open(DB_NAME, DB_USER, DB_PASS)
-    print("Połączono z czystym OrientDB.")
-
-except Exception as e:
-    print(f"Błąd połączenia z OrientDB: {e}")
-    raise e
-
-def create_tables_orient():
-    orient_engine.command("create class  CUSTOMER extends V")
-    orient_engine.command("create class  CUSTOMER_ORDER extends V")
-    orient_engine.command("create class  INVOICE extends V")
-    orient_engine.command("create class  ORDER_ITEM extends V")
-    orient_engine.command("create class  PAYMENT extends V")
-    orient_engine.command("create class  PRODUCT extends V")
-    orient_engine.command("create class SYS_USER extends V")
-
-
-
 
 class FakeDataGenerator:
-    def __init__(self, session: Session):
-        self.fake = Faker('pl_PL')
-        self.session = session
+    def __init__(self, main_session: Session, mirror_session: Session, orient_client):
+        """
+        Inicjalizacja generatora danych.
 
-        # --- CASSANDRA INIT ---
-        # Inicjalizujemy połączenie i tabele przy starcie
-        init_cassandra_schema()
+        Args:
+            main_session: Sesja głównej bazy (Firebird)
+            mirror_session: Sesja bazy lustrzanej (MariaDB)
+            orient_client: Klient OrientDB
+        """
+        self.fake = Faker('pl_PL')
+        self.session = main_session  # Główna sesja (Firebird)
+        self.mirror_session = mirror_session  # Sesja lustrzana (MariaDB)
+        self.orient_client = orient_client  # Klient OrientDB
 
         # --- AGREGATORY DANYCH DLA CASSANDRY ---
         # Cassandra nie robi "GROUP BY" wydajnie, więc policzymy to w Pythonie w trakcie generowania
@@ -451,10 +417,7 @@ class FakeDataGenerator:
             target_session.rollback()
             raise e
 
-    def run_generation(self, num_users: int, num_customers: int, num_orders: int, session_mirror: Session):
-        print("Przed start: Generowanie tabel orientDB")
-        create_tables_orient()
-
+    def run_generation(self, num_users: int, num_customers: int, num_orders: int):
         print("Start: Generowanie danych...")
 
         products = self.generate_fake_products()
@@ -489,22 +452,22 @@ class FakeDataGenerator:
             self.session.commit()  # Zapisujemy w Firebirdzie
             print("Gotowe - Firebird zapisany.")
 
-            self.replicate_sql_data(target_session=session_mirror)
+            self.replicate_sql_data(target_session=self.mirror_session)
 
         except Exception as e:
             print(f"BŁĄD SQL: {e}")
             self.session.rollback()
-            # session_mirror rollback jest robiony wewnątrz funkcji replicate
+            # mirror_session rollback jest robiony wewnątrz funkcji replicate
         finally:
             self.session.close()
-            session_mirror.close()  # Zamykamy też sesję Marii
+            self.mirror_session.close()  # Zamykamy też sesję Marii
 
 
         print("Usuwanie starych danych z OrientDB")
         # Najpierw usuwamy krawędzie (relacje), żeby nie naruszyć spójności
-        orient_engine.command("DELETE EDGE E")
+        self.orient_client.command("DELETE EDGE E")
         # Następnie usuwamy wszystkie wierzchołki (dane)
-        orient_engine.command("DELETE VERTEX V")
+        self.orient_client.command("DELETE VERTEX V")
         #upload to orientDB
         print("Dodawanie danych do OrientDB")
         #upload to orientDB
@@ -513,53 +476,53 @@ class FakeDataGenerator:
         for c in orient_customers_scalar:
             customer_make = "insert into CUSTOMER set CUSTOMER_ID =  %d, NAME =  '%s', EMAIL = '%s' ,PHONE = '%s', ADDRESS = '%s', CITY = '%s', COUNTRY = '%s'"\
             % (c.CUSTOMER_ID, c.NAME, c.EMAIL, c.PHONE, c.ADDRESS, c.CITY, c.COUNTRY)
-            orient_engine.command(customer_make)
+            self.orient_client.command(customer_make)
 
         orient_users = self.session.execute(select(SysUser))
         orient_users_scalar = orient_users.scalars().all()
         for u in orient_users_scalar:
             user_make = "insert into SYS_USER set USER_ID =  %d, USERNAME = '%s' ,PASSWORD_HASH = '%s', NAME = '%s', SURNAME = '%s', EMAIL = '%s', ROLE = '%s', ACTIVE = '%s'"\
             % (u.USER_ID, u.USERNAME, u.PASSWORD_HASH, u.NAME, u.SURNAME, u.EMAIL, u.ROLE, u.ACTIVE)
-            orient_engine.command(user_make)
+            self.orient_client.command(user_make)
 
         orient_customer_orders = self.session.execute(select(CustomerOrder))
         orient_customer_orders_scalar = orient_customer_orders.scalars().all()
         for c in orient_customer_orders_scalar:
             orders_make = "insert into CUSTOMER_ORDER set ORDER_ID =  %d, ORDER_ID =  %d, CUSTOMER_ID = %d ,ORDER_DATE = '%s', STATUS = '%s', TOTAL_AMOUNT = %f" \
             % (c.ORDER_ID, c.ORDER_ID, c.CUSTOMER_ID, c.ORDER_DATE, c.STATUS, c.TOTAL_AMOUNT)
-            orient_engine.command(orders_make)
+            self.orient_client.command(orders_make)
 
         orient_invoice = self.session.execute(select(Invoice))
         orient_invoice_scalar = orient_invoice.scalars().all()
         for i in orient_invoice_scalar:
             invoice_make = "insert into INVOICE set INVOICE_ID = %d, INVOICE_NUMBER =  '%s', CUSTOMER_ID = '%s', ORDER_ID = '%s', STATUS = '%s',  ISSUE_DATE = '%s', DUE_DATE = '%s', TOTAL_AMOUNT = '%s', CREATED_BY = '%s'" \
             % (i.INVOICE_ID, i.INVOICE_NUMBER, i.CUSTOMER_ID, i.ORDER_ID, i.STATUS, i.ISSUE_DATE, i.DUE_DATE, i.TOTAL_AMOUNT, i.CREATED_BY)
-            orient_engine.command(invoice_make)
+            self.orient_client.command(invoice_make)
 
         orient_payment = self.session.execute(select(Payment))
         orient_payment_scalar = orient_payment.scalars().all()
         for p in orient_payment_scalar:
             payment_make = "insert into PAYMENT set PAYMENT_ID =  %d , INVOICE_ID =  %d ,PAYMENT_DATE = '%s', AMOUNT = '%s', METHOD = '%s', CONFIRMED = '%s'" \
             % (p.PAYMENT_ID, p.INVOICE_ID, p.PAYMENT_DATE, p.AMOUNT, p.METHOD, p.CONFIRMED)
-            orient_engine.command(payment_make)
+            self.orient_client.command(payment_make)
 
         orient_products = self.session.execute(select(Product))
         orient_products_scalar = orient_products.scalars().all()
         for p in orient_products_scalar:
             product_make = "insert into PRODUCT set PRODUCT_ID =  %d, NAME = '%s' ,DESCRIPTION = '%s', PRICE = %06.2f, STOCK_QUANTITY = %d" \
             % (p.PRODUCT_ID, p.NAME, p.DESCRIPTION, p.PRICE, p.STOCK_QUANTITY)
-            orient_engine.command(product_make)
+            self.orient_client.command(product_make)
 
         orient_order_items = self.session.execute(select(OrderItem))
         orient_order_items_scalar = orient_order_items.scalars().all()
         for o in orient_order_items_scalar:
             order_item_make = "insert into ORDER_ITEM set ORDER_ITEM_ID = %d, ORDER_ID = %d, PRODUCT_ID = %d, QUANTITY = %d, UNIT_PRICE = %f" \
             % (o.ORDER_ITEM_ID, o.ORDER_ID, o.PRODUCT_ID, o.QUANTITY, o.UNIT_PRICE)
-            orient_engine.command(order_item_make)
+            self.orient_client.command(order_item_make)
 
         print("Zakończono dodawanie danych do OrientDB")
 
         print("Dodawanie połączeń w OrientDB")
-        orient_engine.command("SELECT fill_edge()")
+        self.orient_client.command("SELECT fill_edge()")
         print("Zakończono dodawania połączeń do OrientDB")
-        orient_engine.db_close()
+        self.orient_client.db_close()

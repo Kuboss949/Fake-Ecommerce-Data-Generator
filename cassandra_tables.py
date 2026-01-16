@@ -135,6 +135,27 @@ class CustomerLeaderboard(Model):
 
 
 # ==========================================
+# Funkcja usuwająca strukturę bazy
+# ==========================================
+def drop_cassandra_schema(keyspace='my_keyspace', nodes=['127.0.0.1']):
+    print(f"Łączenie z klastrem Cassandra: {nodes}...")
+    connection.setup(nodes, 'system', protocol_version=4)
+
+    print(f"Usuwanie Keyspace '{keyspace}'...")
+    from cassandra.cluster import Cluster
+    cluster = Cluster(nodes)
+    session = cluster.connect()
+    try:
+        session.execute(f"DROP KEYSPACE IF EXISTS {keyspace}")
+        print(f"Keyspace '{keyspace}' został usunięty.")
+    except Exception as e:
+        print(f"Błąd podczas usuwania keyspace: {e}")
+    finally:
+        session.shutdown()
+        cluster.shutdown()
+
+
+# ==========================================
 # Funkcja inicjalizująca bazę
 # ==========================================
 def init_cassandra_schema(keyspace='my_keyspace', nodes=['127.0.0.1']):

@@ -25,21 +25,24 @@ init = SessionInitiator(drop_data=True)
 def main():
     print("--- INICJALIZACJA BAZ DANYCH ---")
 
+    # Inicjalizacja wszystkich baz danych
     session_fb = init.initiate_fb()
-
     session_maria = init.initiate_maria()
+    orient_client = init.initiate_orient()
+    init.initiate_cassandra()
 
-    # Inicjalizujemy generator GŁÓWNĄ sesją (Firebird)
-    # Generator będzie pisał inserty do tej sesji w trakcie pracy
-    generator = FakeDataGenerator(session_fb)
+    # Inicjalizujemy generator ze wszystkimi sesjami
+    generator = FakeDataGenerator(
+        main_session=session_fb,
+        mirror_session=session_maria,
+        orient_client=orient_client
+    )
 
     # Uruchamiamy generowanie
-    # Przekazujemy sesję Marii jako cel replikacji (mirror)
     generator.run_generation(
         num_users=10,
         num_customers=50,
-        num_orders=100,
-        session_mirror=session_maria
+        num_orders=100
     )
 
 
