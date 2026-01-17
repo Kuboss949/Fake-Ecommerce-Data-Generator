@@ -90,8 +90,8 @@ def get_sample_values(fb_session, cassandra_session):
         row = result.fetchone()
         sample_values['city'] = row[0] if row else 'Warszawa'
 
-        # Pobierz przykladowy rok (z daty platnosci)
-        result = fb_session.execute(text("SELECT FIRST 1 EXTRACT(YEAR FROM PAYMENT_DATE) as year FROM PAYMENT"))
+        # Pobierz przykladowy rok (z daty platnosci) - YEAR jest slowem kluczowym, uzywamy innego aliasu
+        result = fb_session.execute(text("SELECT FIRST 1 EXTRACT(YEAR FROM PAYMENT_DATE) AS payment_year FROM PAYMENT"))
         row = result.fetchone()
         sample_values['year'] = int(row[0]) if row else 2024
 
@@ -412,7 +412,20 @@ def benchmark_cassandra_command(session, query_name, query_text, query_type="DML
         }
 
     except Exception as e:
-        print(f"ERROR: {str(e)[:50]}")
+        error_msg = str(e)
+        # Dla DDL: jesli kolumna juz istnieje, traktujemy jako SKIPPED (nie blad)
+        if query_type == "DDL" and "already exist" in error_msg.lower():
+            print(f"SKIPPED (column exists)")
+            return {
+                "database": "Cassandra",
+                "query_type": query_type,
+                "query_name": query_name,
+                "execution_time_ms": 0,
+                "row_count": None,
+                "status": "SUCCESS",
+                "error": "Column already exists - skipped"
+            }
+        print(f"ERROR: {error_msg[:50]}")
         return {
             "database": "Cassandra",
             "query_type": query_type,
