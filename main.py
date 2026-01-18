@@ -49,9 +49,9 @@ def main():
 
     with ExecutionTimer("Generowanie i replikacja danych"):
         generator.run_generation(
-            num_users=10,
-            num_customers=50,
-            num_orders=100
+            num_users=1000,
+            num_customers=50000,
+            num_orders=100000
         )
 
     # ==========================================

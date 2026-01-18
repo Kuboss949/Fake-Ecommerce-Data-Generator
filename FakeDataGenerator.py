@@ -58,7 +58,7 @@ class FakeDataGenerator:
     def generate_fake_products(self):
         products = []
         print("Generowanie produktów i wysyłka do Cassandry...")
-        with open('products.csv', mode='r', encoding="utf-8") as file:
+        with open('products_5k.csv', mode='r', encoding="utf-8") as file:
             csvFile = csv.reader(file)
             for i, lines in enumerate(csvFile):
                 # SQL Object
