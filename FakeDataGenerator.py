@@ -80,8 +80,8 @@ class FakeDataGenerator:
                     'stock_quantity': product.STOCK_QUANTITY
                 })
 
-                # Flush batch every 500 records
-                if len(cassandra_batch) >= 500:
+                # Flush batch every 50 records (Cassandra has batch size limits)
+                if len(cassandra_batch) >= 50:
                     with BatchQuery() as b:
                         for item in cassandra_batch:
                             ProductsByPrice.batch(b).create(**item)
@@ -404,7 +404,7 @@ class FakeDataGenerator:
                 'product_id': 0
             })
 
-            if len(sales_batch) >= 500:
+            if len(sales_batch) >= 50:
                 with BatchQuery() as b:
                     for item in sales_batch:
                         SalesStatsByCountry.batch(b).create(**item)
@@ -438,7 +438,7 @@ class FakeDataGenerator:
                     'last_invoice_date': data['last_invoice'].date()
                 })
 
-                if len(leader_batch) >= 500:
+                if len(leader_batch) >= 50:
                     with BatchQuery() as b:
                         for item in leader_batch:
                             CustomerLeaderboard.batch(b).create(**item)
