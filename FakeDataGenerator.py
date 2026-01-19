@@ -459,169 +459,8 @@ class FakeDataGenerator:
 
             self.replicate_sql_data(target_session=self.mirror_session)
 
-            # --- UPLOAD DO ORIENTDB ---
-            print("\n📊 Rozpoczynam replikację do OrientDB...")
-            print("   -> Nawiązywanie świeżego połączenia z OrientDB...")
-            try:
-                # Próbujemy zamknąć stare, jeśli jeszcze dycha
-                try:
-                    self.orient_client.close()
-                except:
-                    pass
-
-                # Tworzymy zupełnie nową instancję
-                # Używamy tych samych danych co w docker-compose i SessionInitiator
-                self.orient_client = pyorient.OrientDB("localhost", 2424)
-                self.orient_client.connect("root", "root")
-                self.orient_client.db_open("company", "root", "root")
-                print("   -> Nowe połączenie aktywne!")
-            except Exception as e:
-                print(f"❌ Nie udało się odnowić połączenia: {e}")
-                raise e
-
-            print("   -> Dodawanie Customers...")
-            orient_customers = self.session.execute(select(Customer))
-            orient_customers_scalar = orient_customers.scalars().all()
-            for c in orient_customers_scalar:
-                customer_make = "insert into CUSTOMER set CUSTOMER_ID =  %d, NAME =  '%s', EMAIL = '%s' ,PHONE = '%s', ADDRESS = '%s', CITY = '%s', COUNTRY = '%s'"\
-                % (c.CUSTOMER_ID, c.NAME, c.EMAIL, c.PHONE, c.ADDRESS, c.CITY, c.COUNTRY)
-                self.orient_client.command(customer_make)
-
-            print("   -> Dodawanie Users...")
-            orient_users = self.session.execute(select(SysUser))
-            orient_users_scalar = orient_users.scalars().all()
-            for u in orient_users_scalar:
-                user_make = "insert into SYS_USER set USER_ID =  %d, USERNAME = '%s' ,PASSWORD_HASH = '%s', NAME = '%s', SURNAME = '%s', EMAIL = '%s', ROLE = '%s', ACTIVE = '%s'"\
-                % (u.USER_ID, u.USERNAME, u.PASSWORD_HASH, u.NAME, u.SURNAME, u.EMAIL, u.ROLE, u.ACTIVE)
-                self.orient_client.command(user_make)
-
-            print("   -> Dodawanie Products...")
-            orient_products = self.session.execute(select(Product))
-            orient_products_scalar = orient_products.scalars().all()
-            for p in orient_products_scalar:
-                product_make = "insert into PRODUCT set PRODUCT_ID =  %d, NAME = '%s' ,DESCRIPTION = '%s', PRICE = %06.2f, STOCK_QUANTITY = %d" \
-                % (p.PRODUCT_ID, p.NAME, p.DESCRIPTION, p.PRICE, p.STOCK_QUANTITY)
-                self.orient_client.command(product_make)
-
-            print("   -> Dodawanie Orders...")
-            orient_customer_orders = self.session.execute(select(CustomerOrder))
-            orient_customer_orders_scalar = orient_customer_orders.scalars().all()
-            for c in orient_customer_orders_scalar:
-                orders_make = "insert into CUSTOMER_ORDER set ORDER_ID =  %d, CUSTOMER_ID = %d ,ORDER_DATE = '%s', STATUS = '%s', TOTAL_AMOUNT = %f" \
-                % (c.ORDER_ID, c.CUSTOMER_ID, c.ORDER_DATE, c.STATUS, c.TOTAL_AMOUNT)
-                self.orient_client.command(orders_make)
-
-            print("   -> Dodawanie Order Items...")
-            orient_order_items = self.session.execute(select(OrderItem))
-            orient_order_items_scalar = orient_order_items.scalars().all()
-            for o in orient_order_items_scalar:
-                order_item_make = "insert into ORDER_ITEM set ORDER_ITEM_ID = %d, ORDER_ID = %d, PRODUCT_ID = %d, QUANTITY = %d, UNIT_PRICE = %f" \
-                % (o.ORDER_ITEM_ID, o.ORDER_ID, o.PRODUCT_ID, o.QUANTITY, o.UNIT_PRICE)
-                self.orient_client.command(order_item_make)
-
-            print("   -> Dodawanie Invoices...")
-            orient_invoice = self.session.execute(select(Invoice))
-            orient_invoice_scalar = orient_invoice.scalars().all()
-            for i in orient_invoice_scalar:
-                invoice_make = "insert into INVOICE set INVOICE_ID = %d, INVOICE_NUMBER =  '%s', CUSTOMER_ID = %d, ORDER_ID = %d, STATUS = '%s',  ISSUE_DATE = '%s', DUE_DATE = '%s', TOTAL_AMOUNT = %f, CREATED_BY = %d" \
-                % (i.INVOICE_ID, i.INVOICE_NUMBER, i.CUSTOMER_ID, i.ORDER_ID, i.STATUS, i.ISSUE_DATE, i.DUE_DATE, i.TOTAL_AMOUNT, i.CREATED_BY)
-                self.orient_client.command(invoice_make)
-
-            print("   -> Dodawanie Payments...")
-            orient_payment = self.session.execute(select(Payment))
-            orient_payment_scalar = orient_payment.scalars().all()
-            for p in orient_payment_scalar:
-                payment_make = "insert into PAYMENT set PAYMENT_ID =  %d , INVOICE_ID =  %d ,PAYMENT_DATE = '%s', AMOUNT = %f, METHOD = '%s', CONFIRMED = %d" \
-                % (p.PAYMENT_ID, p.INVOICE_ID, p.PAYMENT_DATE, p.AMOUNT, p.METHOD, p.CONFIRMED)
-                self.orient_client.command(payment_make)
-
-            print("   -> Tworzenie krawędzi (edges)...")
-
-            # Customer -> Invoice
-            print("      -> Customer_to_invoice...")
-            customers_result = self.orient_client.command("SELECT FROM CUSTOMER")
-            for c in customers_result:
-                try:
-                    self.orient_client.command(
-                        f"CREATE EDGE Customer_to_invoice FROM (SELECT FROM CUSTOMER WHERE CUSTOMER_ID = {c.oRecordData['CUSTOMER_ID']}) TO (SELECT FROM INVOICE WHERE CUSTOMER_ID = {c.oRecordData['CUSTOMER_ID']})"
-                    )
-                except:
-                    # Klient może nie mieć faktur, pomijamy
-                    pass
-
-            # Invoice -> Payment
-            print("      -> Invoice_to_payment...")
-            invoices_result = self.orient_client.command("SELECT FROM INVOICE")
-            for i in invoices_result:
-                try:
-                    self.orient_client.command(
-                        f"CREATE EDGE Invoice_to_payment FROM (SELECT FROM INVOICE WHERE INVOICE_ID = {i.oRecordData['INVOICE_ID']}) TO (SELECT FROM PAYMENT WHERE INVOICE_ID = {i.oRecordData['INVOICE_ID']})"
-                    )
-                except:
-                    # Faktura może nie mieć płatności, pomijamy
-                    pass
-
-            # Customer -> Order
-            print("      -> Customer_to_order...")
-            customers_result = self.orient_client.command("SELECT FROM CUSTOMER")
-            for c in customers_result:
-                try:
-                    self.orient_client.command(
-                        f"CREATE EDGE Customer_to_order FROM (SELECT FROM CUSTOMER WHERE CUSTOMER_ID = {c.oRecordData['CUSTOMER_ID']}) TO (SELECT FROM CUSTOMER_ORDER WHERE CUSTOMER_ID = {c.oRecordData['CUSTOMER_ID']})"
-                    )
-                except:
-                    # Klient może nie mieć zamówień, pomijamy
-                    pass
-
-            # Order -> Invoice
-            print("      -> Order_to_invoice...")
-            orders_result = self.orient_client.command("SELECT FROM CUSTOMER_ORDER")
-            for o in orders_result:
-                try:
-                    self.orient_client.command(
-                        f"CREATE EDGE Order_to_invoice FROM (SELECT FROM CUSTOMER_ORDER WHERE ORDER_ID = {o.oRecordData['ORDER_ID']}) TO (SELECT FROM INVOICE WHERE ORDER_ID = {o.oRecordData['ORDER_ID']})"
-                    )
-                except:
-                    # Zamówienie może nie mieć faktury, pomijamy
-                    pass
-
-            # User -> Invoice
-            print("      -> User_to_invoice...")
-            users_result = self.orient_client.command("SELECT FROM SYS_USER")
-            for u in users_result:
-                try:
-                    self.orient_client.command(
-                        f"CREATE EDGE User_to_invoice FROM (SELECT FROM SYS_USER WHERE USER_ID = {u.oRecordData['USER_ID']}) TO (SELECT FROM INVOICE WHERE CREATED_BY = {u.oRecordData['USER_ID']})"
-                    )
-                except:
-                    # User może nie mieć faktur, pomijamy
-                    pass
-
-            # Order -> Order_Item
-            print("      -> Order_to_order_item...")
-            orders_result = self.orient_client.command("SELECT FROM CUSTOMER_ORDER")
-            for o in orders_result:
-                try:
-                    self.orient_client.command(
-                        f"CREATE EDGE Order_to_order_item FROM (SELECT FROM CUSTOMER_ORDER WHERE ORDER_ID = {o.oRecordData['ORDER_ID']}) TO (SELECT FROM ORDER_ITEM WHERE ORDER_ID = {o.oRecordData['ORDER_ID']})"
-                    )
-                except:
-                    # Zamówienie może nie mieć pozycji, pomijamy
-                    pass
-
-            # Product -> Order_Item
-            print("      -> Product_to_order_item...")
-            products_result = self.orient_client.command("SELECT FROM PRODUCT")
-            for p in products_result:
-                try:
-                    self.orient_client.command(
-                        f"CREATE EDGE Product_to_order_item FROM (SELECT FROM PRODUCT WHERE PRODUCT_ID = {p.oRecordData['PRODUCT_ID']}) TO (SELECT FROM ORDER_ITEM WHERE PRODUCT_ID = {p.oRecordData['PRODUCT_ID']})"
-                    )
-                except:
-                    # Produkt może nie być w zamówieniach, pomijamy
-                    pass
-
-            print("✅ Replikacja do OrientDB zakończona sukcesem!")
+            # --- UPLOAD DO ORIENTDB (ZOPTYMALIZOWANY) ---
+            self._replicate_to_orientdb()
 
         except Exception as e:
             print(f"❌ BŁĄD: {e}")
@@ -633,3 +472,356 @@ class FakeDataGenerator:
         #     self.mirror_session.close()
         #     self.orient_client.db_close()
         #     print("🔒 Wszystkie połączenia zamknięte.")
+
+    def _refresh_orient_connection(self):
+        """Odświeża połączenie z OrientDB, aby uniknąć wygaśnięcia tokenu sesji."""
+        try:
+            try:
+                self.orient_client.db_close()
+            except:
+                pass
+            try:
+                self.orient_client.close()
+            except:
+                pass
+        except:
+            pass
+
+        self.orient_client = pyorient.OrientDB("localhost", 2424)
+        self.orient_client.connect("root", "root")
+        self.orient_client.db_open("company", "root", "root")
+
+    def _escape_orient_string(self, value):
+        """Escapuje znaki specjalne w stringach dla OrientDB."""
+        if value is None:
+            return ""
+        return str(value).replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"')
+
+    def _batch_insert_orient(self, table_name, records, batch_size=500):
+        """
+        Wstawia rekordy do OrientDB w partiach używając batch script.
+        Zwraca słownik mapujący ID na RID dla późniejszego tworzenia krawędzi.
+        """
+        id_to_rid = {}
+        total = len(records)
+        inserted = 0
+
+        for i in range(0, total, batch_size):
+            batch = records[i:i + batch_size]
+
+            # Budujemy batch script
+            batch_script = "begin\n"
+            for idx, record in enumerate(batch):
+                fields = []
+                for key, value in record.items():
+                    if isinstance(value, str):
+                        fields.append(f"{key} = '{self._escape_orient_string(value)}'")
+                    elif value is None:
+                        fields.append(f"{key} = null")
+                    else:
+                        fields.append(f"{key} = {value}")
+                fields_str = ", ".join(fields)
+                batch_script += f"let $r{idx} = INSERT INTO {table_name} SET {fields_str}\n"
+
+            batch_script += "commit\n"
+            batch_script += "return ["
+            batch_script += ", ".join([f"$r{idx}" for idx in range(len(batch))])
+            batch_script += "]"
+
+            try:
+                results = self.orient_client.batch(batch_script)
+                # Mapujemy ID na RID
+                for idx, record in enumerate(batch):
+                    # Szukamy klucza ID (CUSTOMER_ID, ORDER_ID, etc.)
+                    id_key = None
+                    for k in record.keys():
+                        if k.endswith("_ID") and k != "CUSTOMER_ID" or k == table_name.replace("CUSTOMER_", "") + "_ID":
+                            id_key = k
+                            break
+                    if id_key is None:
+                        # Próbujemy standardowe nazwy
+                        possible_keys = [f"{table_name}_ID", "CUSTOMER_ID", "ORDER_ID", "USER_ID",
+                                         "PRODUCT_ID", "INVOICE_ID", "PAYMENT_ID", "ORDER_ITEM_ID"]
+                        for pk in possible_keys:
+                            if pk in record:
+                                id_key = pk
+                                break
+
+                    if id_key and idx < len(results):
+                        try:
+                            rid = results[idx]._rid if hasattr(results[idx], '_rid') else str(results[idx])
+                            id_to_rid[record[id_key]] = rid
+                        except:
+                            pass
+            except Exception as e:
+                # Fallback do pojedynczych insertów jeśli batch zawiedzie
+                print(f"      [WARN] Batch insert failed, falling back to single inserts: {e}")
+                for record in batch:
+                    try:
+                        fields = []
+                        for key, value in record.items():
+                            if isinstance(value, str):
+                                fields.append(f"{key} = '{self._escape_orient_string(value)}'")
+                            elif value is None:
+                                fields.append(f"{key} = null")
+                            else:
+                                fields.append(f"{key} = {value}")
+                        fields_str = ", ".join(fields)
+                        result = self.orient_client.command(f"INSERT INTO {table_name} SET {fields_str}")
+                        if result and len(result) > 0:
+                            rid = result[0]._rid if hasattr(result[0], '_rid') else str(result[0])
+                            # Znajdź klucz ID
+                            for k in record.keys():
+                                if k.endswith("_ID"):
+                                    id_to_rid[record[k]] = rid
+                                    break
+                    except Exception as insert_err:
+                        pass
+
+            inserted += len(batch)
+            if inserted % 5000 == 0 or inserted == total:
+                print(f"      ... {inserted}/{total} rekordów")
+
+            # Odświeżamy połączenie co 10000 rekordów
+            if inserted % 10000 == 0 and inserted < total:
+                print("      -> Odświeżanie połączenia...")
+                self._refresh_orient_connection()
+
+        return id_to_rid
+
+    def _replicate_to_orientdb(self):
+        """Zoptymalizowana replikacja do OrientDB z batch insertami i cache'owaniem RID."""
+        print("\n Rozpoczynam replikację do OrientDB...")
+        print("   -> Nawiązywanie świeżego połączenia z OrientDB...")
+        try:
+            self._refresh_orient_connection()
+            print("   -> Nowe połączenie aktywne!")
+        except Exception as e:
+            print(f"BLAD: Nie udało się nawiązać połączenia: {e}")
+            raise e
+
+        # Cache dla RID - pozwala na szybkie tworzenie krawędzi bez dodatkowych SELECT
+        rid_cache = {
+            'customer': {},    # CUSTOMER_ID -> RID
+            'user': {},        # USER_ID -> RID
+            'product': {},     # PRODUCT_ID -> RID
+            'order': {},       # ORDER_ID -> RID
+            'order_item': {},  # ORDER_ITEM_ID -> RID
+            'invoice': {},     # INVOICE_ID -> RID
+            'payment': {},     # PAYMENT_ID -> RID
+        }
+
+        # Mapowania dla krawędzi (klucz obcy -> lista RID)
+        fk_mappings = {
+            'invoice_by_customer': defaultdict(list),    # CUSTOMER_ID -> [Invoice RIDs]
+            'invoice_by_order': defaultdict(list),       # ORDER_ID -> [Invoice RIDs]
+            'invoice_by_user': defaultdict(list),        # CREATED_BY -> [Invoice RIDs]
+            'order_by_customer': defaultdict(list),      # CUSTOMER_ID -> [Order RIDs]
+            'order_item_by_order': defaultdict(list),    # ORDER_ID -> [OrderItem RIDs]
+            'order_item_by_product': defaultdict(list),  # PRODUCT_ID -> [OrderItem RIDs]
+            'payment_by_invoice': defaultdict(list),     # INVOICE_ID -> [Payment RIDs]
+        }
+
+        # 1. CUSTOMERS
+        print("   -> Dodawanie Customers...")
+        customers = self.session.execute(select(Customer)).scalars().all()
+        customer_records = [
+            {
+                'CUSTOMER_ID': c.CUSTOMER_ID,
+                'NAME': c.NAME,
+                'EMAIL': c.EMAIL,
+                'PHONE': c.PHONE,
+                'ADDRESS': c.ADDRESS,
+                'CITY': c.CITY,
+                'COUNTRY': c.COUNTRY
+            } for c in customers
+        ]
+        rid_cache['customer'] = self._batch_insert_orient('CUSTOMER', customer_records)
+        print(f"      Dodano {len(customers)} klientów")
+
+        # 2. USERS
+        print("   -> Dodawanie Users...")
+        self._refresh_orient_connection()
+        users = self.session.execute(select(SysUser)).scalars().all()
+        user_records = [
+            {
+                'USER_ID': u.USER_ID,
+                'USERNAME': u.USERNAME,
+                'PASSWORD_HASH': u.PASSWORD_HASH,
+                'NAME': u.NAME,
+                'SURNAME': u.SURNAME,
+                'EMAIL': u.EMAIL,
+                'ROLE': u.ROLE,
+                'ACTIVE': str(u.ACTIVE) if u.ACTIVE else '1'
+            } for u in users
+        ]
+        rid_cache['user'] = self._batch_insert_orient('SYS_USER', user_records)
+        print(f"      Dodano {len(users)} użytkowników")
+
+        # 3. PRODUCTS
+        print("   -> Dodawanie Products...")
+        self._refresh_orient_connection()
+        products = self.session.execute(select(Product)).scalars().all()
+        product_records = [
+            {
+                'PRODUCT_ID': p.PRODUCT_ID,
+                'NAME': p.NAME,
+                'DESCRIPTION': p.DESCRIPTION,
+                'PRICE': round(float(p.PRICE), 2),
+                'STOCK_QUANTITY': p.STOCK_QUANTITY
+            } for p in products
+        ]
+        rid_cache['product'] = self._batch_insert_orient('PRODUCT', product_records)
+        print(f"      Dodano {len(products)} produktów")
+
+        # 4. ORDERS
+        print("   -> Dodawanie Orders...")
+        self._refresh_orient_connection()
+        orders = self.session.execute(select(CustomerOrder)).scalars().all()
+        order_records = [
+            {
+                'ORDER_ID': o.ORDER_ID,
+                'CUSTOMER_ID': o.CUSTOMER_ID,
+                'ORDER_DATE': str(o.ORDER_DATE),
+                'STATUS': o.STATUS,
+                'TOTAL_AMOUNT': round(float(o.TOTAL_AMOUNT), 2)
+            } for o in orders
+        ]
+        rid_cache['order'] = self._batch_insert_orient('CUSTOMER_ORDER', order_records)
+        # Mapujemy CUSTOMER_ID -> Order RIDs dla krawędzi
+        for o in orders:
+            if o.ORDER_ID in rid_cache['order']:
+                fk_mappings['order_by_customer'][o.CUSTOMER_ID].append(rid_cache['order'][o.ORDER_ID])
+        print(f"      Dodano {len(orders)} zamówień")
+
+        # 5. ORDER ITEMS
+        print("   -> Dodawanie Order Items...")
+        self._refresh_orient_connection()
+        order_items = self.session.execute(select(OrderItem)).scalars().all()
+        order_item_records = [
+            {
+                'ORDER_ITEM_ID': oi.ORDER_ITEM_ID,
+                'ORDER_ID': oi.ORDER_ID,
+                'PRODUCT_ID': oi.PRODUCT_ID,
+                'QUANTITY': oi.QUANTITY,
+                'UNIT_PRICE': round(float(oi.UNIT_PRICE), 2)
+            } for oi in order_items
+        ]
+        rid_cache['order_item'] = self._batch_insert_orient('ORDER_ITEM', order_item_records)
+        # Mapowania dla krawędzi
+        for oi in order_items:
+            if oi.ORDER_ITEM_ID in rid_cache['order_item']:
+                rid = rid_cache['order_item'][oi.ORDER_ITEM_ID]
+                fk_mappings['order_item_by_order'][oi.ORDER_ID].append(rid)
+                fk_mappings['order_item_by_product'][oi.PRODUCT_ID].append(rid)
+        print(f"      Dodano {len(order_items)} pozycji zamówień")
+
+        # 6. INVOICES
+        print("   -> Dodawanie Invoices...")
+        self._refresh_orient_connection()
+        invoices = self.session.execute(select(Invoice)).scalars().all()
+        invoice_records = [
+            {
+                'INVOICE_ID': i.INVOICE_ID,
+                'INVOICE_NUMBER': i.INVOICE_NUMBER,
+                'CUSTOMER_ID': i.CUSTOMER_ID,
+                'ORDER_ID': i.ORDER_ID,
+                'STATUS': i.STATUS,
+                'ISSUE_DATE': str(i.ISSUE_DATE),
+                'DUE_DATE': str(i.DUE_DATE),
+                'TOTAL_AMOUNT': round(float(i.TOTAL_AMOUNT), 2),
+                'CREATED_BY': i.CREATED_BY
+            } for i in invoices
+        ]
+        rid_cache['invoice'] = self._batch_insert_orient('INVOICE', invoice_records)
+        # Mapowania dla krawędzi
+        for i in invoices:
+            if i.INVOICE_ID in rid_cache['invoice']:
+                rid = rid_cache['invoice'][i.INVOICE_ID]
+                fk_mappings['invoice_by_customer'][i.CUSTOMER_ID].append(rid)
+                fk_mappings['invoice_by_order'][i.ORDER_ID].append(rid)
+                fk_mappings['invoice_by_user'][i.CREATED_BY].append(rid)
+        print(f"      Dodano {len(invoices)} faktur")
+
+        # 7. PAYMENTS
+        print("   -> Dodawanie Payments...")
+        self._refresh_orient_connection()
+        payments = self.session.execute(select(Payment)).scalars().all()
+        payment_records = [
+            {
+                'PAYMENT_ID': p.PAYMENT_ID,
+                'INVOICE_ID': p.INVOICE_ID,
+                'PAYMENT_DATE': str(p.PAYMENT_DATE),
+                'AMOUNT': round(float(p.AMOUNT), 2),
+                'METHOD': p.METHOD,
+                'CONFIRMED': p.CONFIRMED
+            } for p in payments
+        ]
+        rid_cache['payment'] = self._batch_insert_orient('PAYMENT', payment_records)
+        # Mapowanie dla krawędzi
+        for p in payments:
+            if p.PAYMENT_ID in rid_cache['payment']:
+                fk_mappings['payment_by_invoice'][p.INVOICE_ID].append(rid_cache['payment'][p.PAYMENT_ID])
+        print(f"      Dodano {len(payments)} płatności")
+
+        # --- TWORZENIE KRAWĘDZI (ZOPTYMALIZOWANE) ---
+        print("   -> Tworzenie krawędzi (edges)...")
+        self._refresh_orient_connection()
+
+        self._create_edges_batch('Customer_to_invoice', rid_cache['customer'], fk_mappings['invoice_by_customer'])
+        self._create_edges_batch('Invoice_to_payment', rid_cache['invoice'], fk_mappings['payment_by_invoice'])
+        self._create_edges_batch('Customer_to_order', rid_cache['customer'], fk_mappings['order_by_customer'])
+        self._create_edges_batch('Order_to_invoice', rid_cache['order'], fk_mappings['invoice_by_order'])
+        self._create_edges_batch('User_to_invoice', rid_cache['user'], fk_mappings['invoice_by_user'])
+        self._create_edges_batch('Order_to_order_item', rid_cache['order'], fk_mappings['order_item_by_order'])
+        self._create_edges_batch('Product_to_order_item', rid_cache['product'], fk_mappings['order_item_by_product'])
+
+        print("Replikacja do OrientDB zakończona sukcesem!")
+
+    def _create_edges_batch(self, edge_class, from_rid_map, to_rids_by_fk, batch_size=200):
+        """
+        Tworzy krawędzie w partiach używając bezpośrednich RID zamiast SELECT.
+        from_rid_map: {ID -> RID} dla wierzchołków źródłowych
+        to_rids_by_fk: {FK_ID -> [RID, ...]} dla wierzchołków docelowych
+        """
+        print(f"      -> {edge_class}...")
+        edges_created = 0
+        edge_commands = []
+
+        for fk_id, to_rids in to_rids_by_fk.items():
+            if fk_id in from_rid_map and to_rids:
+                from_rid = from_rid_map[fk_id]
+                for to_rid in to_rids:
+                    edge_commands.append((from_rid, to_rid))
+
+        total_edges = len(edge_commands)
+        if total_edges == 0:
+            print(f"         Brak krawędzi do utworzenia")
+            return
+
+        for i in range(0, total_edges, batch_size):
+            batch = edge_commands[i:i + batch_size]
+
+            # Budujemy batch script dla krawędzi
+            batch_script = "begin\n"
+            for idx, (from_rid, to_rid) in enumerate(batch):
+                batch_script += f"CREATE EDGE {edge_class} FROM {from_rid} TO {to_rid}\n"
+            batch_script += "commit\nreturn true"
+
+            try:
+                self.orient_client.batch(batch_script)
+                edges_created += len(batch)
+            except Exception as e:
+                # Fallback do pojedynczych insertów
+                for from_rid, to_rid in batch:
+                    try:
+                        self.orient_client.command(f"CREATE EDGE {edge_class} FROM {from_rid} TO {to_rid}")
+                        edges_created += 1
+                    except:
+                        pass
+
+            if edges_created % 5000 == 0 and edges_created > 0:
+                print(f"         ... {edges_created}/{total_edges}")
+                self._refresh_orient_connection()
+
+        print(f"         Utworzono {edges_created} krawędzi")

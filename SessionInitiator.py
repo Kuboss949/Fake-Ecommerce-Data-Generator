@@ -90,6 +90,34 @@ class SessionInitiator:
                     # Klasa już istnieje, pomijamy
                     pass
 
+            # TWORZENIE INDEKSÓW - kluczowe dla wydajności przy dużych zbiorach danych
+            print("   -> Tworzenie indeksów...")
+            indexes = [
+                ("CUSTOMER", "CUSTOMER_ID", "UNIQUE"),
+                ("SYS_USER", "USER_ID", "UNIQUE"),
+                ("PRODUCT", "PRODUCT_ID", "UNIQUE"),
+                ("CUSTOMER_ORDER", "ORDER_ID", "UNIQUE"),
+                ("CUSTOMER_ORDER", "CUSTOMER_ID", "NOTUNIQUE"),
+                ("ORDER_ITEM", "ORDER_ITEM_ID", "UNIQUE"),
+                ("ORDER_ITEM", "ORDER_ID", "NOTUNIQUE"),
+                ("ORDER_ITEM", "PRODUCT_ID", "NOTUNIQUE"),
+                ("INVOICE", "INVOICE_ID", "UNIQUE"),
+                ("INVOICE", "CUSTOMER_ID", "NOTUNIQUE"),
+                ("INVOICE", "ORDER_ID", "NOTUNIQUE"),
+                ("INVOICE", "CREATED_BY", "NOTUNIQUE"),
+                ("PAYMENT", "PAYMENT_ID", "UNIQUE"),
+                ("PAYMENT", "INVOICE_ID", "NOTUNIQUE"),
+            ]
+            for cls, prop, idx_type in indexes:
+                try:
+                    # Najpierw tworzymy właściwość (jeśli nie istnieje)
+                    orient_client.command(f"CREATE PROPERTY {cls}.{prop} IF NOT EXISTS INTEGER")
+                    # Następnie tworzymy indeks
+                    orient_client.command(f"CREATE INDEX {cls}.{prop} {idx_type}")
+                except Exception as e:
+                    # Indeks już istnieje lub inny błąd, pomijamy
+                    pass
+
             print("   -> Gotowe.")
             return orient_client  # ZWRACAMY KLIENTA!
 
