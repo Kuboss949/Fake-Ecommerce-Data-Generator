@@ -125,8 +125,8 @@ class FakeDataGenerator:
                 'email': user.EMAIL
             })
 
-            # Flush batch every 500 records
-            if len(cassandra_batch) >= 500:
+            # Flush batch every 50 records (Cassandra has batch size limits)
+            if len(cassandra_batch) >= 50:
                 with BatchQuery() as b:
                     for item in cassandra_batch:
                         UsersByRole.batch(b).create(**item)
@@ -173,8 +173,8 @@ class FakeDataGenerator:
                 'email': email
             })
 
-            # Flush batch every 500 records
-            if len(cassandra_batch) >= 500:
+            # Flush batch every 50 records (Cassandra has batch size limits)
+            if len(cassandra_batch) >= 50:
                 with BatchQuery() as b:
                     for item in cassandra_batch:
                         CustomersByCity.batch(b).create(**item)
