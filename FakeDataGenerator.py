@@ -17,7 +17,7 @@ from cassandra_tables import (
 )
 
 from modele import Base, SysUser, Customer, Product, CustomerOrder, OrderItem, Invoice, Payment
-
+import pyorientdb as pyorient
 
 class FakeDataGenerator:
     def __init__(self, main_session: Session, mirror_session: Session, orient_client):
@@ -212,8 +212,7 @@ class FakeDataGenerator:
 
     def generate_fake_invoice(self, order, user, customer_obj, order_id, agent_username):
         # ... Twoja logika ...
-        random_suffix = random.randint(100000, 999999)
-        invoice_number = f"FV/{order.ORDER_DATE.strftime('%Y%m%d')}/{random_suffix}"
+        invoice_number = f"FV/{order.ORDER_DATE.strftime('%Y%m%d')}/{order_id:06d}"
         issue_date = order.ORDER_DATE
         due_date = issue_date + timedelta(days=14)
         total_amount = order.TOTAL_AMOUNT
@@ -371,11 +370,10 @@ class FakeDataGenerator:
                     last_invoice_date=data['last_invoice'].date()
                 )
 
-    def replicate_sql_data(self, target_session):
-        """Kopiuje dane z bieżącej sesji (Firebird) do sesji docelowej (MariaDB)"""
+    def replicate_sql_data(self, target_session, batch_size=1000):
+        """Kopiuje dane z bieżącej sesji (Firebird) do sesji docelowej (MariaDB) z podziałem na paczki"""
         print("\n🔄 Rozpoczynam replikację danych (Firebird -> MariaDB)...")
 
-        # Kolejność tabel jest WAŻNA (od rodzica do dziecka), żeby nie naruszyć Kluczy Obcych
         models_order = [
             SysUser,
             Product,
@@ -389,31 +387,38 @@ class FakeDataGenerator:
         try:
             for model in models_order:
                 model_name = model.__tablename__
-                # 1. Pobieramy dane z Firebirda (self.session)
+                # 1. Pobieramy dane z Firebirda
+                # UWAGA: Przy bardzo dużej ilości danych (miliony) tutaj też warto użyć yield_per(),
+                # ale przy 50-100k .all() jeszcze przejdzie.
                 source_objects = self.session.query(model).all()
-                count = len(source_objects)
-                print(f"   ➡️ Kopiowanie tabeli: {model_name} ({count} rekordów)...")
+                total_count = len(source_objects)
+                print(f"   ➡️ Kopiowanie tabeli: {model_name} ({total_count} rekordów)...")
 
-                target_objects = []
+                if total_count == 0:
+                    continue
+
+                target_objects_buffer = []
+
+                # Przygotowanie obiektów
                 for obj in source_objects:
-                    # 2. Klonujemy obiekt "na czysto" wyciągając dane do słownika
-                    # inspect().mapper.column_attrs daje nam listę kolumn z modelu
                     data = {c.key: getattr(obj, c.key) for c in inspect(model).mapper.column_attrs}
+                    target_objects_buffer.append(model(**data))
 
-                    # Tworzymy nową instancję dla MariaDB
-                    new_obj = model(**data)
-                    target_objects.append(new_obj)
-
-                # 3. Zapisujemy paczkę do MariaDB
-                if target_objects:
-                    target_session.bulk_save_objects(target_objects)
-                    # Commitujemy po każdej tabeli, żeby ID były widoczne dla następnych tabel (FK)
-                    target_session.commit()
+                # 2. Zapisywanie partiami (Chunking)
+                for i in range(0, total_count, batch_size):
+                    batch = target_objects_buffer[i: i + batch_size]
+                    try:
+                        target_session.bulk_save_objects(batch)
+                        target_session.commit()  # Commitujemy każdą paczkę osobno
+                    except Exception as chunk_error:
+                        print(f"Błąd przy zapisie paczki {i}-{i + batch_size} dla {model_name}: {chunk_error}")
+                        target_session.rollback()
+                        raise chunk_error
 
             print("✅ Replikacja zakończona sukcesem!")
 
         except Exception as e:
-            print(f"❌ Błąd podczas replikacji: {e}")
+            print(f"❌ Błąd krytyczny podczas replikacji: {e}")
             target_session.rollback()
             raise e
 
@@ -456,6 +461,23 @@ class FakeDataGenerator:
 
             # --- UPLOAD DO ORIENTDB ---
             print("\n📊 Rozpoczynam replikację do OrientDB...")
+            print("   -> Nawiązywanie świeżego połączenia z OrientDB...")
+            try:
+                # Próbujemy zamknąć stare, jeśli jeszcze dycha
+                try:
+                    self.orient_client.close()
+                except:
+                    pass
+
+                # Tworzymy zupełnie nową instancję
+                # Używamy tych samych danych co w docker-compose i SessionInitiator
+                self.orient_client = pyorient.OrientDB("localhost", 2424)
+                self.orient_client.connect("root", "root")
+                self.orient_client.db_open("company", "root", "root")
+                print("   -> Nowe połączenie aktywne!")
+            except Exception as e:
+                print(f"❌ Nie udało się odnowić połączenia: {e}")
+                raise e
 
             print("   -> Dodawanie Customers...")
             orient_customers = self.session.execute(select(Customer))
