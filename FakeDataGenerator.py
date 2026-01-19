@@ -57,6 +57,7 @@ class FakeDataGenerator:
 
     def generate_fake_products(self):
         products = []
+        cassandra_batch = []
         print("Generowanie produktów i wysyłka do Cassandry...")
         with open('products_5k.csv', mode='r', encoding="utf-8") as file:
             csvFile = csv.reader(file)
@@ -70,20 +71,34 @@ class FakeDataGenerator:
                 )
                 products.append(product)
 
-                # --- CASSANDRA WRITE ---
-                # Zakładamy ID = i + 1, bo baza SQL jeszcze nie nadała ID (chyba że zrobisz flush)
-                # Dla uproszczenia przyjmuję, że ID będą zgodne z kolejnością
-                ProductsByPrice.create(
-                    bucket="all_products",  # Stała wartość do partycjonowania
-                    price=product.PRICE,
-                    product_id=i + 1,  # Symulujemy ID
-                    name=product.NAME,
-                    stock_quantity=product.STOCK_QUANTITY
-                )
+                # --- CASSANDRA WRITE (BATCHED) ---
+                cassandra_batch.append({
+                    'bucket': "all_products",
+                    'price': product.PRICE,
+                    'product_id': i + 1,
+                    'name': product.NAME,
+                    'stock_quantity': product.STOCK_QUANTITY
+                })
+
+                # Flush batch every 500 records
+                if len(cassandra_batch) >= 500:
+                    with BatchQuery() as b:
+                        for item in cassandra_batch:
+                            ProductsByPrice.batch(b).create(**item)
+                    cassandra_batch = []
+
+            # Flush remaining records
+            if cassandra_batch:
+                with BatchQuery() as b:
+                    for item in cassandra_batch:
+                        ProductsByPrice.batch(b).create(**item)
+
+        print(f"   -> Dodano {len(products)} produktów")
         return products
 
     def generate_fake_users(self, count: int):
         users = []
+        cassandra_batch = []
         print("Generowanie userów i wysyłka do Cassandry...")
         for i in range(count):
             name = self.fake.first_name()
@@ -101,18 +116,34 @@ class FakeDataGenerator:
             )
             users.append(user)
 
-            # --- CASSANDRA WRITE ---
-            UsersByRole.create(
-                role=role,
-                user_id=i + 1,  # Symulacja ID
-                username=username,
-                name=f"{name} {surname}",
-                email=user.EMAIL
-            )
+            # --- CASSANDRA WRITE (BATCHED) ---
+            cassandra_batch.append({
+                'role': role,
+                'user_id': i + 1,
+                'username': username,
+                'name': f"{name} {surname}",
+                'email': user.EMAIL
+            })
+
+            # Flush batch every 500 records
+            if len(cassandra_batch) >= 500:
+                with BatchQuery() as b:
+                    for item in cassandra_batch:
+                        UsersByRole.batch(b).create(**item)
+                cassandra_batch = []
+
+        # Flush remaining records
+        if cassandra_batch:
+            with BatchQuery() as b:
+                for item in cassandra_batch:
+                    UsersByRole.batch(b).create(**item)
+
+        print(f"   -> Dodano {len(users)} użytkowników")
         return users
 
     def generate_fake_customers(self, count: int):
         customers = []
+        cassandra_batch = []
         print("Generowanie klientów i wysyłka do Cassandry...")
         for i in range(count):
             # ... Twoja logika generowania ...
@@ -134,13 +165,28 @@ class FakeDataGenerator:
             )
             customers.append(customer)
 
-            # --- CASSANDRA WRITE ---
-            CustomersByCity.create(
-                city=customer.CITY,
-                customer_id=i + 1,
-                name=name,
-                email=email
-            )
+            # --- CASSANDRA WRITE (BATCHED) ---
+            cassandra_batch.append({
+                'city': customer.CITY,
+                'customer_id': i + 1,
+                'name': name,
+                'email': email
+            })
+
+            # Flush batch every 500 records
+            if len(cassandra_batch) >= 500:
+                with BatchQuery() as b:
+                    for item in cassandra_batch:
+                        CustomersByCity.batch(b).create(**item)
+                cassandra_batch = []
+
+        # Flush remaining records
+        if cassandra_batch:
+            with BatchQuery() as b:
+                for item in cassandra_batch:
+                    CustomersByCity.batch(b).create(**item)
+
+        print(f"   -> Dodano {len(customers)} klientów")
         return customers
 
     # ... funkcja generate_order_items bez zmian ...
@@ -344,35 +390,71 @@ class FakeDataGenerator:
     def flush_cassandra_stats(self):
         print("Finalizowanie: Zapisywanie zagregowanych statystyk do Cassandry...")
 
-        # 1. Zapis Sales Stats
-        print(f"Zapisywanie {len(self.stats_sales_cache)} rekordów sprzedaży...")
-        for (country, prod_name), qty in self.stats_sales_cache.items():
-            SalesStatsByCountry.create(
-                country=country,
-                product_name=prod_name,
-                total_quantity_sum=qty,
-                product_id=0  # Opcjonalne
-            )
+        # 1. Zapis Sales Stats (BATCHED)
+        total_sales = len(self.stats_sales_cache)
+        print(f"Zapisywanie {total_sales} rekordów sprzedaży...")
+        sales_batch = []
+        processed = 0
 
-        # 2. Zapis Leaderboard
-        print(f"Zapisywanie leaderboarda dla {len(self.stats_leaderboard_cache)} klientów...")
+        for (country, prod_name), qty in self.stats_sales_cache.items():
+            sales_batch.append({
+                'country': country,
+                'product_name': prod_name,
+                'total_quantity_sum': qty,
+                'product_id': 0
+            })
+
+            if len(sales_batch) >= 500:
+                with BatchQuery() as b:
+                    for item in sales_batch:
+                        SalesStatsByCountry.batch(b).create(**item)
+                processed += len(sales_batch)
+                if processed % 5000 == 0:
+                    print(f"   ... {processed}/{total_sales}")
+                sales_batch = []
+
+        # Flush remaining
+        if sales_batch:
+            with BatchQuery() as b:
+                for item in sales_batch:
+                    SalesStatsByCountry.batch(b).create(**item)
+
+        # 2. Zapis Leaderboard (BATCHED)
+        total_leaders = len(self.stats_leaderboard_cache)
+        print(f"Zapisywanie leaderboarda dla {total_leaders} klientów...")
+        leader_batch = []
+
         for cid, data in self.stats_leaderboard_cache.items():
             # Filtrujemy tylko tych co coś kupili (opcjonalne)
             if data['orders_count'] > 0:
-                CustomerLeaderboard.create(
-                    country=data['country'],
-                    gross_value_brutto=data['gross_value'],
-                    customer_name=data['customer_name'],
-                    agent_username=data['agent'],
-                    orders_count=data['orders_count'],
-                    unique_products_count=len(data['unique_products']),
-                    total_items_quantity=data['items_count'],
-                    last_invoice_date=data['last_invoice'].date()
-                )
+                leader_batch.append({
+                    'country': data['country'],
+                    'gross_value_brutto': data['gross_value'],
+                    'customer_name': data['customer_name'],
+                    'agent_username': data['agent'],
+                    'orders_count': data['orders_count'],
+                    'unique_products_count': len(data['unique_products']),
+                    'total_items_quantity': data['items_count'],
+                    'last_invoice_date': data['last_invoice'].date()
+                })
 
-    def replicate_sql_data(self, target_session, batch_size=1000):
-        """Kopiuje dane z bieżącej sesji (Firebird) do sesji docelowej (MariaDB) z podziałem na paczki"""
-        print("\n🔄 Rozpoczynam replikację danych (Firebird -> MariaDB)...")
+                if len(leader_batch) >= 500:
+                    with BatchQuery() as b:
+                        for item in leader_batch:
+                            CustomerLeaderboard.batch(b).create(**item)
+                    leader_batch = []
+
+        # Flush remaining
+        if leader_batch:
+            with BatchQuery() as b:
+                for item in leader_batch:
+                    CustomerLeaderboard.batch(b).create(**item)
+
+        print("   -> Statystyki zapisane.")
+
+    def replicate_sql_data(self, target_session, batch_size=2000):
+        """Kopiuje dane z bieżącej sesji (Firebird) do sesji docelowej (MariaDB) ze streamingiem"""
+        print("\n Rozpoczynam replikację danych (Firebird -> MariaDB)...")
 
         models_order = [
             SysUser,
@@ -387,44 +469,61 @@ class FakeDataGenerator:
         try:
             for model in models_order:
                 model_name = model.__tablename__
-                # 1. Pobieramy dane z Firebirda
-                # UWAGA: Przy bardzo dużej ilości danych (miliony) tutaj też warto użyć yield_per(),
-                # ale przy 50-100k .all() jeszcze przejdzie.
-                source_objects = self.session.query(model).all()
-                total_count = len(source_objects)
-                print(f"   ➡️ Kopiowanie tabeli: {model_name} ({total_count} rekordów)...")
+                column_attrs = list(inspect(model).mapper.column_attrs)
+
+                # Count first (fast query)
+                total_count = self.session.query(model).count()
+                print(f"   -> Kopiowanie tabeli: {model_name} ({total_count} rekordów)...")
 
                 if total_count == 0:
                     continue
 
+                # Stream data using yield_per to avoid loading all into memory
                 target_objects_buffer = []
+                processed = 0
 
-                # Przygotowanie obiektów
-                for obj in source_objects:
-                    data = {c.key: getattr(obj, c.key) for c in inspect(model).mapper.column_attrs}
+                for obj in self.session.query(model).yield_per(batch_size):
+                    data = {c.key: getattr(obj, c.key) for c in column_attrs}
                     target_objects_buffer.append(model(**data))
+                    processed += 1
 
-                # 2. Zapisywanie partiami (Chunking)
-                for i in range(0, total_count, batch_size):
-                    batch = target_objects_buffer[i: i + batch_size]
+                    # Flush batch when full
+                    if len(target_objects_buffer) >= batch_size:
+                        try:
+                            target_session.bulk_save_objects(target_objects_buffer)
+                            target_session.commit()
+                            if processed % 10000 == 0:
+                                print(f"      ... {processed}/{total_count}")
+                        except Exception as chunk_error:
+                            print(f"Błąd przy zapisie paczki dla {model_name}: {chunk_error}")
+                            target_session.rollback()
+                            raise chunk_error
+                        target_objects_buffer = []
+
+                # Flush remaining objects
+                if target_objects_buffer:
                     try:
-                        target_session.bulk_save_objects(batch)
-                        target_session.commit()  # Commitujemy każdą paczkę osobno
+                        target_session.bulk_save_objects(target_objects_buffer)
+                        target_session.commit()
                     except Exception as chunk_error:
-                        print(f"Błąd przy zapisie paczki {i}-{i + batch_size} dla {model_name}: {chunk_error}")
+                        print(f"Błąd przy zapisie ostatniej paczki dla {model_name}: {chunk_error}")
                         target_session.rollback()
                         raise chunk_error
 
-            print("✅ Replikacja zakończona sukcesem!")
+                # Clear session cache to free memory after each table
+                self.session.expire_all()
+
+            print("Replikacja zakończona sukcesem!")
 
         except Exception as e:
-            print(f"❌ Błąd krytyczny podczas replikacji: {e}")
+            print(f"Błąd krytyczny podczas replikacji: {e}")
             target_session.rollback()
             raise e
 
     def run_generation(self, num_users: int, num_customers: int, num_orders: int):
         print("Start: Generowanie danych...")
 
+        # --- FAZA 1: Produkty, Użytkownicy, Klienci ---
         products = self.generate_fake_products()
         self.session.bulk_save_objects(products, return_defaults=True)
         # Hack: nadajemy tymczasowe ID, żeby logika działała przed commit
@@ -440,21 +539,38 @@ class FakeDataGenerator:
         # Hack ID
         for i, c in enumerate(customers): c.CUSTOMER_ID = i + 1
 
+        # Commit base data first to reduce transaction size
+        print("Commit bazy (produkty, użytkownicy, klienci)...")
+        self.session.commit()
+        print("   -> Baza zapisana.")
+
         sales_users = [u for u in users if u.ROLE == 'SALES']
 
+        # --- FAZA 2: Zamówienia z pośrednimi commitami ---
         print(f"Start: Generowanie {num_orders} zamówień...")
+        commit_interval = 5000  # Commit every 5000 orders to balance performance and safety
+
         for i in range(num_orders):
             # Przekazujemy i + 1 jako ID zamówienia
             self.generate_fake_order_data(customers, products, sales_users, i + 1)
-            if (i + 1) % 100 == 0:
+
+            # Progress report
+            if (i + 1) % 1000 == 0:
                 print(f" ... wygenerowano {i + 1}/{num_orders}")
+
+            # Intermediate commit to reduce memory and transaction size
+            if (i + 1) % commit_interval == 0:
+                print(f"   -> Pośredni commit ({i + 1} zamówień)...")
+                self.session.commit()
+
+        # Final commit for remaining orders
+        print("   -> Finalny commit zamówień...")
+        self.session.commit()
 
         # --- FINALIZACJA CASSANDRY ---
         self.flush_cassandra_stats()
 
         try:
-            print("Commit SQL (Firebird)...")
-            self.session.commit()  # Zapisujemy w Firebirdzie
             print("Gotowe - Firebird zapisany.")
 
             self.replicate_sql_data(target_session=self.mirror_session)
