@@ -2,12 +2,12 @@
 Skrypt do replikacji danych z Firebirda do MariaDB, OrientDB i Cassandry.
 Uruchamiany osobno, gdy generowanie danych zostalo zakonczone, ale replikacja sie nie powiodla.
 
-UWAGA: Ten skrypt NIE usuwa danych z zadnej bazy - tylko dodaje/aktualizuje.
+UWAGA: Ustawienie DROP_BEFORE_REPLICATE = True usunie WSZYSTKIE dane z docelowych baz!
 """
 
 import sys
 from collections import defaultdict
-from sqlalchemy import create_engine, select, inspect
+from sqlalchemy import create_engine, select, inspect, text
 from sqlalchemy.orm import sessionmaker
 import pyorientdb as pyorient
 
@@ -20,6 +20,7 @@ from cassandra_tables import (
     init_cassandra_schema
 )
 from cassandra.cqlengine.query import BatchQuery
+from cassandra.cluster import Cluster
 
 
 # ============== KONFIGURACJA ==============
@@ -37,6 +38,85 @@ CASSANDRA_KEYSPACE = 'my_keyspace'
 REPLICATE_TO_MARIADB = True
 REPLICATE_TO_ORIENTDB = True
 REPLICATE_TO_CASSANDRA = False  # Cassandra juz ma dane z generacji
+
+# UWAGA: Ustawienie True usunie WSZYSTKIE dane przed replikacja!
+DROP_BEFORE_REPLICATE = True
+
+
+# ============== FUNKCJE DROPOWANIA DANYCH ==============
+
+def drop_mariadb_data(session):
+    """Usuwa wszystkie dane z tabel MariaDB (w odpowiedniej kolejnosci - FK)."""
+    print("[MariaDB] Usuwanie danych...")
+
+    # Wylacz sprawdzanie kluczy obcych
+    session.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
+
+    tables = ['PAYMENT', 'INVOICE', 'ORDER_ITEM', 'CUSTOMER_ORDER', 'CUSTOMER', 'PRODUCT', 'SYS_USER']
+    for table in tables:
+        try:
+            session.execute(text(f"TRUNCATE TABLE {table}"))
+            print(f"   -> TRUNCATE {table} OK")
+        except Exception as e:
+            print(f"   -> TRUNCATE {table} ERROR: {e}")
+
+    # Wlacz sprawdzanie kluczy obcych
+    session.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
+    session.commit()
+    print("[MariaDB] Dane usuniete!")
+
+
+def drop_orientdb_data(client):
+    """Usuwa wszystkie wierzcholki i krawedzie z OrientDB."""
+    print("[OrientDB] Usuwanie danych...")
+
+    # Najpierw usuwamy krawedzie
+    edge_classes = [
+        "Customer_to_invoice", "Invoice_to_payment", "Customer_to_order",
+        "Order_to_invoice", "User_to_invoice", "Order_to_order_item", "Product_to_order_item"
+    ]
+    for edge_class in edge_classes:
+        try:
+            client.command(f"DELETE EDGE {edge_class}")
+            print(f"   -> DELETE EDGE {edge_class} OK")
+        except Exception as e:
+            print(f"   -> DELETE EDGE {edge_class} SKIP: {e}")
+
+    # Potem usuwamy wierzcholki
+    vertex_classes = ["PAYMENT", "INVOICE", "ORDER_ITEM", "CUSTOMER_ORDER", "CUSTOMER", "PRODUCT", "SYS_USER"]
+    for vertex_class in vertex_classes:
+        try:
+            client.command(f"DELETE VERTEX {vertex_class}")
+            print(f"   -> DELETE VERTEX {vertex_class} OK")
+        except Exception as e:
+            print(f"   -> DELETE VERTEX {vertex_class} SKIP: {e}")
+
+    print("[OrientDB] Dane usuniete!")
+
+
+def drop_cassandra_data():
+    """Usuwa wszystkie dane z tabel Cassandra (TRUNCATE)."""
+    print("[Cassandra] Usuwanie danych...")
+
+    cluster = Cluster(CASSANDRA_HOSTS)
+    session = cluster.connect(CASSANDRA_KEYSPACE)
+
+    tables = [
+        'users_by_role', 'customers_by_city', 'payments_by_year_amount',
+        'products_by_price', 'invoice_full_details', 'sales_stats_by_country_product',
+        'customer_performance_leaderboard', 'invoices_by_customer_name', 'order_items_by_product'
+    ]
+
+    for table in tables:
+        try:
+            session.execute(f"TRUNCATE {table}")
+            print(f"   -> TRUNCATE {table} OK")
+        except Exception as e:
+            print(f"   -> TRUNCATE {table} SKIP: {e}")
+
+    session.shutdown()
+    cluster.shutdown()
+    print("[Cassandra] Dane usuniete!")
 
 
 def create_firebird_session():
@@ -89,11 +169,12 @@ def replicate_to_mariadb(source_session, target_session, batch_size=500):
         model_name = model.__tablename__
         column_attrs = list(inspect(model).mapper.column_attrs)
 
-        # Sprawdz ile juz jest w MariaDB
-        existing_count = target_session.query(model).count()
-        if existing_count > 0:
-            print(f"   [{model_name}] Juz istnieje {existing_count} rekordow - pomijam")
-            continue
+        # Sprawdz ile juz jest w MariaDB (tylko jesli nie dropujemy)
+        if not DROP_BEFORE_REPLICATE:
+            existing_count = target_session.query(model).count()
+            if existing_count > 0:
+                print(f"   [{model_name}] Juz istnieje {existing_count} rekordow - pomijam")
+                continue
 
         # Policz rekordy w Firebird
         total_count = source_session.query(model).count()
@@ -301,17 +382,18 @@ def replicate_to_orientdb(source_session):
     client = create_orient_connection()
     print("[OrientDB] Polaczono!")
 
-    # Sprawdz czy dane juz istnieja
-    try:
-        existing = client.command("SELECT count(*) FROM CUSTOMER")
-        if existing and len(existing) > 0:
-            count = existing[0].oRecordData.get('count', 0)
-            if count > 0:
-                print(f"[OrientDB] Juz istnieje {count} klientow - pomijam replikacje")
-                client.close()
-                return
-    except:
-        pass
+    # Sprawdz czy dane juz istnieja (tylko jesli nie dropujemy)
+    if not DROP_BEFORE_REPLICATE:
+        try:
+            existing = client.command("SELECT count(*) FROM CUSTOMER")
+            if existing and len(existing) > 0:
+                count = existing[0].oRecordData.get('count', 0)
+                if count > 0:
+                    print(f"[OrientDB] Juz istnieje {count} klientow - pomijam replikacje")
+                    client.close()
+                    return
+        except:
+            pass
 
     # Cache dla RID
     rid_cache = {
@@ -499,6 +581,7 @@ def main():
     print(f"MariaDB:   {'TAK' if REPLICATE_TO_MARIADB else 'NIE'}")
     print(f"OrientDB:  {'TAK' if REPLICATE_TO_ORIENTDB else 'NIE'}")
     print(f"Cassandra: {'TAK' if REPLICATE_TO_CASSANDRA else 'NIE'}")
+    print(f"Drop przed replikacja: {'TAK' if DROP_BEFORE_REPLICATE else 'NIE'}")
     print("=" * 60)
 
     # Polacz z Firebirdem
@@ -510,6 +593,32 @@ def main():
         count = fb_session.query(model).count()
         print(f"   {model.__tablename__}: {count} rekordow")
 
+    # ========== DROP DANYCH PRZED REPLIKACJA ==========
+    if DROP_BEFORE_REPLICATE:
+        print("\n" + "=" * 60)
+        print("USUWANIE DANYCH Z DOCELOWYCH BAZ")
+        print("=" * 60)
+
+        if REPLICATE_TO_MARIADB:
+            maria_session, maria_engine = create_mariadb_session()
+            drop_mariadb_data(maria_session)
+            maria_session.close()
+
+        if REPLICATE_TO_ORIENTDB:
+            try:
+                orient_client = create_orient_connection()
+                drop_orientdb_data(orient_client)
+                orient_client.close()
+            except Exception as e:
+                print(f"[OrientDB] Blad przy usuwaniu danych: {e}")
+
+        if REPLICATE_TO_CASSANDRA:
+            try:
+                drop_cassandra_data()
+            except Exception as e:
+                print(f"[Cassandra] Blad przy usuwaniu danych: {e}")
+
+    # ========== REPLIKACJA ==========
     # Replikacja do MariaDB
     if REPLICATE_TO_MARIADB:
         maria_session, maria_engine = create_mariadb_session()
