@@ -25,24 +25,41 @@ ORIENT_SELECT_QUERIES = {
     "invoices_with_customers": """MATCH {class: CUSTOMER, as: c} -Customer_to_invoice-> {class: INVOICE, as: i}
                                RETURN i.CUSTOMER_ID as customer_id, i.INVOICE_NUMBER as invoice_number, i.TOTAL_AMOUNT as total_amount, c.NAME as customer_name""",
 
-    # LEFT JOIN z wykorzystaniem grafowych krawędzi
-    "invoices_with_payments": """MATCH {class: INVOICE, as: i} -Invoice_to_payment-> {class: PAYMENT, as: p}
-                              RETURN i.INVOICE_ID as invoice_id, i.INVOICE_NUMBER as invoice_number, p.METHOD as method, p.AMOUNT as amount
+    # LEFT JOIN - używamy SQL z LET dla symulacji LEFT JOIN (MATCH nie wspiera LEFT JOIN)
+    "invoices_with_payments": """SELECT i.INVOICE_ID as invoice_id, i.INVOICE_NUMBER as invoice_number,
+                              p.METHOD as method, p.AMOUNT as amount
+                              FROM INVOICE i
+                              LET p = (SELECT FROM PAYMENT WHERE INVOICE_ID = i.INVOICE_ID)
                               ORDER BY i.INVOICE_ID""",
 
-    # Raport: Ilość sztuk per kraj - wykorzystanie grafowych relacji
-    "report_quantity_per_country": """MATCH {class: CUSTOMER, as: c} -Customer_to_order-> {class: CUSTOMER_ORDER, as: co} -Order_to_order_item-> {class: ORDER_ITEM, as: oi} <-Product_to_order_item- {class: PRODUCT, as: p}
-                                   RETURN c.COUNTRY as Kraj, p.NAME as Nazwa_Produktu, SUM(oi.QUANTITY) AS Laczna_Ilosc_Sztuk
+    # Raport: Ilość sztuk per kraj - używamy SQL dla poprawnej agregacji
+    "report_quantity_per_country": """SELECT c.COUNTRY AS Kraj, p.NAME AS Nazwa_Produktu, SUM(oi.QUANTITY) AS Laczna_Ilosc_Sztuk
+                                   FROM CUSTOMER c, CUSTOMER_ORDER co, ORDER_ITEM oi, PRODUCT p
+                                   WHERE c.CUSTOMER_ID = co.CUSTOMER_ID
+                                     AND co.ORDER_ID = oi.ORDER_ID
+                                     AND oi.PRODUCT_ID = p.PRODUCT_ID
                                    GROUP BY c.COUNTRY, p.NAME
                                    ORDER BY c.COUNTRY ASC, Laczna_Ilosc_Sztuk DESC""",
 
-    # Zlozony raport sprzedazowy - MATCH w OrientDB nie wspiera HAVING,
-    # wiec uzywamy zagniezdzonego SELECT z WHERE
-    "complex_sales_report": """SELECT FROM (
-        MATCH {class: CUSTOMER, as: c} -Customer_to_order-> {class: CUSTOMER_ORDER, as: co, where: (STATUS = 'COMPLETED')} -Order_to_order_item-> {class: ORDER_ITEM, as: oi} <-Product_to_order_item- {class: PRODUCT, as: p}, {as: co} -Order_to_invoice-> {class: INVOICE, as: i} -Invoice_to_payment-> {class: PAYMENT, as: pay, where: (CONFIRMED = 1)}, {as: i} <-User_to_invoice- {class: SYS_USER, as: u}
-        RETURN c.NAME AS Nazwa_Klienta, c.COUNTRY AS Kraj, u.USERNAME AS Agent, COUNT(DISTINCT(co.ORDER_ID)) AS Liczba_Zrealizowanych_Zamowien, COUNT(DISTINCT(p.PRODUCT_ID)) AS Liczba_Unikalnych_Produktow, SUM(oi.QUANTITY) AS Laczna_Ilosc_Sztuk, SUM(oi.QUANTITY * oi.UNIT_PRICE) AS Wartosc_Zamowien_Brutto, MAX(i.ISSUE_DATE) AS Data_Ostatniej_Faktury
-        GROUP BY c.NAME, c.COUNTRY, u.USERNAME
-    ) WHERE Laczna_Ilosc_Sztuk > 10 ORDER BY Wartosc_Zamowien_Brutto DESC"""
+    # Zlozony raport sprzedazowy - używamy SQL dla poprawnej agregacji z HAVING
+    "complex_sales_report": """SELECT c.NAME AS Nazwa_Klienta, c.COUNTRY AS Kraj, u.USERNAME AS Agent,
+                            COUNT(DISTINCT co.ORDER_ID) AS Liczba_Zrealizowanych_Zamowien,
+                            COUNT(DISTINCT p.PRODUCT_ID) AS Liczba_Unikalnych_Produktow,
+                            SUM(oi.QUANTITY) AS Laczna_Ilosc_Sztuk,
+                            SUM(oi.QUANTITY * oi.UNIT_PRICE) AS Wartosc_Zamowien_Brutto,
+                            MAX(i.ISSUE_DATE) AS Data_Ostatniej_Faktury
+                            FROM CUSTOMER c, CUSTOMER_ORDER co, ORDER_ITEM oi, PRODUCT p, INVOICE i, SYS_USER u, PAYMENT pay
+                            WHERE c.CUSTOMER_ID = co.CUSTOMER_ID
+                              AND co.ORDER_ID = oi.ORDER_ID
+                              AND oi.PRODUCT_ID = p.PRODUCT_ID
+                              AND co.ORDER_ID = i.ORDER_ID
+                              AND i.CREATED_BY = u.USER_ID
+                              AND i.INVOICE_ID = pay.INVOICE_ID
+                              AND co.STATUS = 'COMPLETED'
+                              AND pay.CONFIRMED = 1
+                            GROUP BY c.NAME, c.COUNTRY, u.USERNAME
+                            HAVING SUM(oi.QUANTITY) > 10
+                            ORDER BY Wartosc_Zamowien_Brutto DESC"""
 }
 
 # ==========================================
