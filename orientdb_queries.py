@@ -6,8 +6,8 @@ OrientDB wspiera zarówno SQL jak i zapytania grafowe (MATCH).
 Wykorzystujemy krawędzie (edges) do wydajniejszych zapytań grafowych.
 """
 
-# Limit wyników dla zapytań SELECT (można nadpisać w benchmarku)
-FETCH_LIMIT = 100
+# Limit wyników dla zapytań SELECT (ustawiony na -1 = bez limitu)
+FETCH_LIMIT = -1
 
 # ==========================================
 # ZAPYTANIA ODCZYTUJACE (SELECT)
