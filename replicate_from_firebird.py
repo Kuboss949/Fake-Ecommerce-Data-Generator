@@ -37,7 +37,7 @@ CASSANDRA_KEYSPACE = 'my_keyspace'
 # Co replikowac
 REPLICATE_TO_MARIADB = True
 REPLICATE_TO_ORIENTDB = True
-REPLICATE_TO_CASSANDRA = False  # Cassandra juz ma dane z generacji
+REPLICATE_TO_CASSANDRA = True
 
 # UWAGA: Ustawienie True usunie WSZYSTKIE dane przed replikacja!
 DROP_BEFORE_REPLICATE = True
@@ -574,6 +574,294 @@ def replicate_to_orientdb(source_session):
         pass
 
 
+def replicate_to_cassandra(source_session):
+    """Replikuje dane z Firebirda do Cassandry."""
+    print("\n========== REPLIKACJA DO CASSANDRA ==========")
+
+    from cassandra.cqlengine import connection
+    from cassandra.cqlengine.management import sync_table
+
+    # Polacz z Cassandra
+    print("[Cassandra] Laczenie...")
+    connection.setup(CASSANDRA_HOSTS, CASSANDRA_KEYSPACE, protocol_version=4)
+    print("[Cassandra] Polaczono!")
+
+    # 1. USERS BY ROLE
+    print("   -> Dodawanie Users...")
+    users = source_session.execute(select(SysUser)).scalars().all()
+    batch = []
+    for u in users:
+        batch.append({
+            'role': u.ROLE,
+            'user_id': u.USER_ID,
+            'username': u.USERNAME,
+            'name': f"{u.NAME} {u.SURNAME}",
+            'email': u.EMAIL
+        })
+        if len(batch) >= 50:
+            with BatchQuery() as b:
+                for item in batch:
+                    UsersByRole.batch(b).create(**item)
+            batch = []
+    if batch:
+        with BatchQuery() as b:
+            for item in batch:
+                UsersByRole.batch(b).create(**item)
+    print(f"      Dodano {len(users)} uzytkownikow")
+
+    # 2. CUSTOMERS BY CITY
+    print("   -> Dodawanie Customers...")
+    customers = source_session.execute(select(Customer)).scalars().all()
+    batch = []
+    for c in customers:
+        batch.append({
+            'city': c.CITY,
+            'customer_id': c.CUSTOMER_ID,
+            'name': c.NAME,
+            'email': c.EMAIL
+        })
+        if len(batch) >= 50:
+            with BatchQuery() as b:
+                for item in batch:
+                    CustomersByCity.batch(b).create(**item)
+            batch = []
+    if batch:
+        with BatchQuery() as b:
+            for item in batch:
+                CustomersByCity.batch(b).create(**item)
+    print(f"      Dodano {len(customers)} klientow")
+
+    # 3. PRODUCTS BY PRICE
+    print("   -> Dodawanie Products...")
+    products = source_session.execute(select(Product)).scalars().all()
+    batch = []
+    for p in products:
+        batch.append({
+            'bucket': 'all_products',
+            'price': float(p.PRICE),
+            'product_id': p.PRODUCT_ID,
+            'name': p.NAME,
+            'stock_quantity': p.STOCK_QUANTITY
+        })
+        if len(batch) >= 50:
+            with BatchQuery() as b:
+                for item in batch:
+                    ProductsByPrice.batch(b).create(**item)
+            batch = []
+    if batch:
+        with BatchQuery() as b:
+            for item in batch:
+                ProductsByPrice.batch(b).create(**item)
+    print(f"      Dodano {len(products)} produktow")
+
+    # 4. PAYMENTS BY YEAR/AMOUNT
+    print("   -> Dodawanie Payments...")
+    payments = source_session.execute(select(Payment)).scalars().all()
+    batch = []
+    for p in payments:
+        batch.append({
+            'year': p.PAYMENT_DATE.year,
+            'amount': float(p.AMOUNT),
+            'payment_id': p.PAYMENT_ID,
+            'method': p.METHOD,
+            'payment_date': p.PAYMENT_DATE,
+            'confirmed': bool(p.CONFIRMED)
+        })
+        if len(batch) >= 50:
+            with BatchQuery() as b:
+                for item in batch:
+                    PaymentsByYearAmount.batch(b).create(**item)
+            batch = []
+    if batch:
+        with BatchQuery() as b:
+            for item in batch:
+                PaymentsByYearAmount.batch(b).create(**item)
+    print(f"      Dodano {len(payments)} platnosci")
+
+    # 5. INVOICE FULL DETAILS (denormalizowane z Customer i Payment)
+    print("   -> Dodawanie Invoice Details...")
+    invoices = source_session.execute(select(Invoice)).scalars().all()
+
+    # Budujemy mapy dla szybkiego dostepu
+    customer_map = {c.CUSTOMER_ID: c for c in customers}
+    payment_map = {}
+    for p in payments:
+        payment_map[p.INVOICE_ID] = p
+
+    batch = []
+    for i in invoices:
+        customer = customer_map.get(i.CUSTOMER_ID)
+        payment = payment_map.get(i.INVOICE_ID)
+
+        batch.append({
+            'invoice_id': i.INVOICE_ID,
+            'invoice_number': i.INVOICE_NUMBER,
+            'issue_date': i.ISSUE_DATE.date() if hasattr(i.ISSUE_DATE, 'date') else i.ISSUE_DATE,
+            'due_date': i.DUE_DATE.date() if hasattr(i.DUE_DATE, 'date') else i.DUE_DATE,
+            'total_amount': float(i.TOTAL_AMOUNT),
+            'status': i.STATUS,
+            'past_due': False,
+            'customer_id': i.CUSTOMER_ID,
+            'customer_name': customer.NAME if customer else 'Unknown',
+            'customer_email': customer.EMAIL if customer else '',
+            'payment_method': payment.METHOD if payment else 'N/A',
+            'payment_amount': float(payment.AMOUNT) if payment else 0.0,
+            'payment_confirmed': bool(payment.CONFIRMED) if payment else False
+        })
+        if len(batch) >= 50:
+            with BatchQuery() as b:
+                for item in batch:
+                    InvoiceFullDetails.batch(b).create(**item)
+            batch = []
+    if batch:
+        with BatchQuery() as b:
+            for item in batch:
+                InvoiceFullDetails.batch(b).create(**item)
+    print(f"      Dodano {len(invoices)} faktur")
+
+    # 6. INVOICES BY CUSTOMER NAME
+    print("   -> Dodawanie Invoices by Customer Name...")
+    batch = []
+    for i in invoices:
+        customer = customer_map.get(i.CUSTOMER_ID)
+        batch.append({
+            'customer_name': customer.NAME if customer else 'Unknown',
+            'invoice_id': i.INVOICE_ID,
+            'total_amount': float(i.TOTAL_AMOUNT),
+            'status': i.STATUS
+        })
+        if len(batch) >= 50:
+            with BatchQuery() as b:
+                for item in batch:
+                    InvoicesByCustomerName.batch(b).create(**item)
+            batch = []
+    if batch:
+        with BatchQuery() as b:
+            for item in batch:
+                InvoicesByCustomerName.batch(b).create(**item)
+    print(f"      Dodano {len(invoices)} wpisow")
+
+    # 7. ORDER ITEMS BY PRODUCT
+    print("   -> Dodawanie Order Items by Product...")
+    order_items = source_session.execute(select(OrderItem)).scalars().all()
+
+    # Mapujemy ORDER_ID -> INVOICE_ID
+    orders = source_session.execute(select(CustomerOrder)).scalars().all()
+    order_to_invoice = {}
+    for inv in invoices:
+        order_to_invoice[inv.ORDER_ID] = inv.INVOICE_ID
+
+    batch = []
+    for oi in order_items:
+        invoice_id = order_to_invoice.get(oi.ORDER_ID, 0)
+        batch.append({
+            'product_id': oi.PRODUCT_ID,
+            'invoice_id': invoice_id,
+            'quantity': oi.QUANTITY,
+            'unit_price': float(oi.UNIT_PRICE)
+        })
+        if len(batch) >= 50:
+            with BatchQuery() as b:
+                for item in batch:
+                    OrderItemsByProduct.batch(b).create(**item)
+            batch = []
+    if batch:
+        with BatchQuery() as b:
+            for item in batch:
+                OrderItemsByProduct.batch(b).create(**item)
+    print(f"      Dodano {len(order_items)} pozycji")
+
+    # 8. SALES STATS BY COUNTRY (agregacja)
+    print("   -> Agregowanie Sales Stats...")
+    from collections import defaultdict
+    stats_cache = defaultdict(int)
+
+    # Mapujemy ORDER_ID -> CUSTOMER
+    order_to_customer = {}
+    for o in orders:
+        order_to_customer[o.ORDER_ID] = customer_map.get(o.CUSTOMER_ID)
+
+    # Mapujemy PRODUCT_ID -> NAME
+    product_map = {p.PRODUCT_ID: p.NAME for p in products}
+
+    for oi in order_items:
+        customer = order_to_customer.get(oi.ORDER_ID)
+        if customer:
+            country = customer.COUNTRY
+            prod_name = product_map.get(oi.PRODUCT_ID, 'Unknown')
+            stats_cache[(country, prod_name)] += oi.QUANTITY
+
+    batch = []
+    for (country, prod_name), qty in stats_cache.items():
+        batch.append({
+            'country': country,
+            'product_name': prod_name,
+            'total_quantity_sum': qty,
+            'product_id': 0
+        })
+        if len(batch) >= 50:
+            with BatchQuery() as b:
+                for item in batch:
+                    SalesStatsByCountry.batch(b).create(**item)
+            batch = []
+    if batch:
+        with BatchQuery() as b:
+            for item in batch:
+                SalesStatsByCountry.batch(b).create(**item)
+    print(f"      Dodano {len(stats_cache)} statystyk")
+
+    # 9. CUSTOMER LEADERBOARD (agregacja)
+    print("   -> Agregowanie Customer Leaderboard...")
+    leaderboard = defaultdict(lambda: {
+        'gross_value': 0.0,
+        'orders_count': 0,
+        'items_count': 0,
+        'unique_products': set(),
+        'last_invoice': None,
+        'agent': 'Unknown'
+    })
+
+    # Mapujemy USER_ID -> USERNAME
+    user_map = {u.USER_ID: u.USERNAME for u in users}
+
+    for inv in invoices:
+        if inv.STATUS == 'PAID':
+            customer = customer_map.get(inv.CUSTOMER_ID)
+            if customer:
+                key = (customer.COUNTRY, customer.NAME)
+                leaderboard[key]['gross_value'] += float(inv.TOTAL_AMOUNT)
+                leaderboard[key]['orders_count'] += 1
+                leaderboard[key]['agent'] = user_map.get(inv.CREATED_BY, 'Unknown')
+                if leaderboard[key]['last_invoice'] is None or inv.ISSUE_DATE > leaderboard[key]['last_invoice']:
+                    leaderboard[key]['last_invoice'] = inv.ISSUE_DATE
+
+    batch = []
+    for (country, customer_name), data in leaderboard.items():
+        if data['orders_count'] > 0:
+            batch.append({
+                'country': country,
+                'gross_value_brutto': data['gross_value'],
+                'customer_name': customer_name,
+                'agent_username': data['agent'],
+                'orders_count': data['orders_count'],
+                'unique_products_count': len(data['unique_products']),
+                'total_items_quantity': data['items_count'],
+                'last_invoice_date': data['last_invoice'].date() if hasattr(data['last_invoice'], 'date') else data['last_invoice']
+            })
+            if len(batch) >= 50:
+                with BatchQuery() as b:
+                    for item in batch:
+                        CustomerLeaderboard.batch(b).create(**item)
+                batch = []
+    if batch:
+        with BatchQuery() as b:
+            for item in batch:
+                CustomerLeaderboard.batch(b).create(**item)
+    print(f"      Dodano {len(leaderboard)} klientow do leaderboarda")
+
+    print("[Cassandra] Replikacja zakonczona!")
+
+
 def main():
     print("=" * 60)
     print("REPLIKACJA DANYCH Z FIREBIRDA")
@@ -628,6 +916,10 @@ def main():
     # Replikacja do OrientDB
     if REPLICATE_TO_ORIENTDB:
         replicate_to_orientdb(fb_session)
+
+    # Replikacja do Cassandry
+    if REPLICATE_TO_CASSANDRA:
+        replicate_to_cassandra(fb_session)
 
     # Zamknij Firebird
     fb_session.close()
