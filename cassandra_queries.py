@@ -44,10 +44,11 @@ CQL_SELECT_QUERIES = {
 
     # SQL: SELECT ... FROM INVOICE JOIN CUSTOMER ...
     # NOWE: Pobiera wszystkie faktury (partycjonowane po roku)
+    # Rozszerzony zakres lat aby objac wszystkie dane
     "invoices_with_customers": """
                        SELECT invoice_number, total_amount, customer_name
                        FROM all_invoices_with_details
-                       WHERE year IN (2023, 2024, 2025, 2026)
+                       WHERE year IN (2020, 2021, 2022, 2023, 2024, 2025, 2026, 2027, 2028, 2029, 2030)
                        """,
 
     # SQL: SELECT ... FROM INVOICE LEFT JOIN PAYMENT ...
@@ -55,7 +56,7 @@ CQL_SELECT_QUERIES = {
     "invoices_with_payments": """
                        SELECT invoice_id, invoice_number, payment_method, payment_amount
                        FROM all_invoices_with_details
-                       WHERE year IN (2023, 2024, 2025, 2026)
+                       WHERE year IN (2020, 2021, 2022, 2023, 2024, 2025, 2026, 2027, 2028, 2029, 2030)
                        """,
 
     # SQL: Raport ilosc sztuk per kraj

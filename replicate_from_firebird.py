@@ -871,39 +871,64 @@ def replicate_to_cassandra(source_session):
     print(f"      Dodano {len(stats_cache)} statystyk")
 
     # 9. CUSTOMER LEADERBOARD ALL - NOWA TABELA (bucket='all')
+    # Logika zgodna z SQL: ORDER.STATUS='COMPLETED', PAYMENT.CONFIRMED=1, HAVING SUM(qty)>10
     print("   -> Agregowanie Customer Leaderboard All...")
+
+    # Budujemy mapowania
+    order_map = {o.ORDER_ID: o for o in orders}
+    invoice_to_order = {inv.INVOICE_ID: inv.ORDER_ID for inv in invoices}
+
+    # Znajdz zamowienia COMPLETED z potwierdzonymi platosciami
+    valid_orders = set()
+    order_invoice_map = {}  # ORDER_ID -> INVOICE
+    for inv in invoices:
+        order = order_map.get(inv.ORDER_ID)
+        if order and order.STATUS == 'COMPLETED':
+            payment = payment_map.get(inv.INVOICE_ID)
+            if payment and payment.CONFIRMED:
+                valid_orders.add(inv.ORDER_ID)
+                order_invoice_map[inv.ORDER_ID] = inv
+
+    # Agreguj dane zgodnie z logika SQL
     leaderboard = defaultdict(lambda: {
         'gross_value': 0.0,
         'orders_count': 0,
         'items_count': 0,
         'unique_products': set(),
+        'unique_orders': set(),
         'last_invoice': None,
         'agent': 'Unknown',
         'country': ''
     })
 
-    for inv in invoices:
-        if inv.STATUS == 'PAID':
-            customer = customer_map.get(inv.CUSTOMER_ID)
-            if customer:
-                key = customer.NAME
-                leaderboard[key]['gross_value'] += float(inv.TOTAL_AMOUNT)
-                leaderboard[key]['orders_count'] += 1
-                leaderboard[key]['agent'] = user_map.get(inv.CREATED_BY, 'Unknown')
+    for oi in order_items:
+        if oi.ORDER_ID in valid_orders:
+            order = order_map.get(oi.ORDER_ID)
+            customer = customer_map.get(order.CUSTOMER_ID) if order else None
+            inv = order_invoice_map.get(oi.ORDER_ID)
+
+            if customer and inv:
+                key = (customer.NAME, customer.COUNTRY, user_map.get(inv.CREATED_BY, 'Unknown'))
+                leaderboard[key]['items_count'] += oi.QUANTITY
+                leaderboard[key]['gross_value'] += float(oi.QUANTITY * oi.UNIT_PRICE)
+                leaderboard[key]['unique_products'].add(oi.PRODUCT_ID)
+                leaderboard[key]['unique_orders'].add(oi.ORDER_ID)
                 leaderboard[key]['country'] = customer.COUNTRY
+                leaderboard[key]['agent'] = user_map.get(inv.CREATED_BY, 'Unknown')
                 if leaderboard[key]['last_invoice'] is None or inv.ISSUE_DATE > leaderboard[key]['last_invoice']:
                     leaderboard[key]['last_invoice'] = inv.ISSUE_DATE
 
     batch = []
-    for customer_name, data in leaderboard.items():
-        if data['orders_count'] > 0:
+    for (customer_name, country, agent), data in leaderboard.items():
+        # HAVING SUM(oi.QUANTITY) > 10
+        if data['items_count'] > 10:
             batch.append({
                 'bucket': 'all',
                 'gross_value_brutto': data['gross_value'],
                 'customer_name': customer_name,
-                'country': data['country'],
-                'agent_username': data['agent'],
-                'orders_count': data['orders_count'],
+                'country': country,
+                'agent_username': agent,
+                'orders_count': len(data['unique_orders']),
                 'unique_products_count': len(data['unique_products']),
                 'total_items_quantity': data['items_count'],
                 'last_invoice_date': data['last_invoice'].date() if hasattr(data['last_invoice'], 'date') else data['last_invoice']
@@ -917,7 +942,7 @@ def replicate_to_cassandra(source_session):
         with BatchQuery() as b:
             for item in batch:
                 CustomerLeaderboardAll.batch(b).create(**item)
-    print(f"      Dodano {len(leaderboard)} klientow do leaderboarda")
+    print(f"      Dodano {len([k for k,v in leaderboard.items() if v['items_count'] > 10])} klientow do leaderboarda")
 
     # Zamknij sesje
     cql_session.shutdown()
