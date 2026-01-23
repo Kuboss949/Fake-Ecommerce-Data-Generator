@@ -38,8 +38,8 @@ CASSANDRA_HOSTS = ['127.0.0.1']
 CASSANDRA_KEYSPACE = 'my_keyspace'
 
 # Co replikowac
-REPLICATE_TO_MARIADB = True
-REPLICATE_TO_ORIENTDB = True
+REPLICATE_TO_MARIADB = False
+REPLICATE_TO_ORIENTDB = False
 REPLICATE_TO_CASSANDRA = True
 
 # UWAGA: Ustawienie True usunie WSZYSTKIE dane przed replikacja!

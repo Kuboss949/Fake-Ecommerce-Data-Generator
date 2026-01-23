@@ -1,5 +1,5 @@
 from SessionInitiator import SessionInitiator
-from FakeDataGenerator import FakeDataGenerator
+#from FakeDataGenerator import FakeDataGenerator
 from benchmark import run_benchmark, ExecutionTimer
 import codecs
 
@@ -18,6 +18,7 @@ def main():
     print("="*70)
 
     # ==========================================
+    # INICJALIZACJA BAZ DANYCH
     # INICJALIZACJA BAZ DANYCH
     # ==========================================
     print("\n[FAZA 1] INICJALIZACJA BAZ DANYCH")

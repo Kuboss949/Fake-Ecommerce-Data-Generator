@@ -456,17 +456,17 @@ def run_select_benchmarks(fb_session, maria_session, orient_client, cassandra_se
         result = benchmark_sql_query(fb_session, name, query, "Firebird")
         benchmark_results.append(result)
 
-    # MariaDB SELECT
-    print("\n[MariaDB] SELECT:")
-    for name, query in MARIA_SELECT.items():
-        result = benchmark_sql_query(maria_session, name, query, "MariaDB")
-        benchmark_results.append(result)
-
-    # OrientDB SELECT
-    print("\n[OrientDB] SELECT:")
-    for name, query in ORIENT_SELECT_QUERIES.items():
-        result = benchmark_orient_query(orient_client, name, query)
-        benchmark_results.append(result)
+    # # MariaDB SELECT
+    # print("\n[MariaDB] SELECT:")
+    # for name, query in MARIA_SELECT.items():
+    #     result = benchmark_sql_query(maria_session, name, query, "MariaDB")
+    #     benchmark_results.append(result)
+    #
+    # # OrientDB SELECT
+    # print("\n[OrientDB] SELECT:")
+    # for name, query in ORIENT_SELECT_QUERIES.items():
+    #     result = benchmark_orient_query(orient_client, name, query)
+    #     benchmark_results.append(result)
 
     # Cassandra SELECT - z podstawionymi parametrami
     print("\n[Cassandra] SELECT:")

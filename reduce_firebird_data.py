@@ -30,9 +30,7 @@ def get_current_counts(session):
 def reduce_data(target_orders: int):
     """
     Redukuje dane w Firebird do zadanej liczby zamowien.
-
-    Args:
-        target_orders: Docelowa liczba zamowien (CUSTOMER_ORDER)
+    Wersja z batchowaniem, aby uniknac bledu limitu 65k w IN clause.
     """
     print("=" * 60)
     print(f"REDUKCJA DANYCH FIREBIRD DO {target_orders} ZAMOWIEN")
@@ -57,59 +55,66 @@ def reduce_data(target_orders: int):
         session.close()
         return
 
-    orders_to_delete = current_orders - target_orders
-    print(f"\n[3/8] Do usuniecia: {orders_to_delete:,} zamowien")
+    orders_to_delete_count = current_orders - target_orders
+    print(f"\n[3/8] Do usuniecia: {orders_to_delete_count:,} zamowien")
 
     # Znajdz ORDER_ID do usuniecia (najstarsze)
     print("\n[4/8] Wyszukiwanie zamowien do usuniecia...")
+    # Pobieramy same ID
     result = session.execute(text(f"""
-        SELECT FIRST {orders_to_delete} ORDER_ID
+        SELECT FIRST {orders_to_delete_count} ORDER_ID
         FROM CUSTOMER_ORDER
         ORDER BY ORDER_ID ASC
     """))
-    order_ids_to_delete = [row[0] for row in result]
+    all_order_ids = [row[0] for row in result]
 
-    if not order_ids_to_delete:
+    if not all_order_ids:
         print("[INFO] Brak zamowien do usuniecia.")
         session.close()
         return
 
-    # Konwertuj na string dla IN clause
-    order_ids_str = ','.join(map(str, order_ids_to_delete))
+    # --- ZMIANA: Przetwarzanie w paczkach (batches) ---
+    BATCH_SIZE = 1000  # Bezpieczna wartosc ponizej limitu 65535
+    total_deleted_orders = 0
 
-    # Znajdz powiazane INVOICE_ID
-    print("\n[5/8] Wyszukiwanie powiazanych faktur...")
-    result = session.execute(text(f"""
-        SELECT INVOICE_ID FROM INVOICE WHERE ORDER_ID IN ({order_ids_str})
-    """))
-    invoice_ids = [row[0] for row in result]
-    invoice_ids_str = ','.join(map(str, invoice_ids)) if invoice_ids else '0'
+    print(f"\n[5-6/8] Usuwanie danych w paczkach po {BATCH_SIZE}...")
 
-    print(f"   Znaleziono {len(invoice_ids):,} faktur do usuniecia")
+    # Pętla po paczkach ID
+    for i in range(0, len(all_order_ids), BATCH_SIZE):
+        batch_ids = all_order_ids[i: i + BATCH_SIZE]
+        order_ids_str = ','.join(map(str, batch_ids))
 
-    # USUWANIE W KOLEJNOSCI FK
-    print("\n[6/8] Usuwanie danych (kolejnosc FK)...")
+        # 1. Znajdz faktury dla tej paczki zamowien
+        result_inv = session.execute(text(f"""
+            SELECT INVOICE_ID FROM INVOICE WHERE ORDER_ID IN ({order_ids_str})
+        """))
+        invoice_ids = [row[0] for row in result_inv]
+        invoice_ids_str = ','.join(map(str, invoice_ids)) if invoice_ids else '0'
 
-    # 1. PAYMENT
-    if invoice_ids:
-        result = session.execute(text(f"DELETE FROM PAYMENT WHERE INVOICE_ID IN ({invoice_ids_str})"))
-        print(f"   -> PAYMENT: usunieto {result.rowcount:,} rekordow")
+        # 2. Usun PAYMENT (dla faktur z tej paczki)
+        if invoice_ids:
+            session.execute(text(f"DELETE FROM PAYMENT WHERE INVOICE_ID IN ({invoice_ids_str})"))
 
-    # 2. INVOICE
-    if invoice_ids:
-        result = session.execute(text(f"DELETE FROM INVOICE WHERE INVOICE_ID IN ({invoice_ids_str})"))
-        print(f"   -> INVOICE: usunieto {result.rowcount:,} rekordow")
+        # 3. Usun INVOICE (dla faktur z tej paczki)
+        if invoice_ids:
+            session.execute(text(f"DELETE FROM INVOICE WHERE INVOICE_ID IN ({invoice_ids_str})"))
 
-    # 3. ORDER_ITEM
-    result = session.execute(text(f"DELETE FROM ORDER_ITEM WHERE ORDER_ID IN ({order_ids_str})"))
-    print(f"   -> ORDER_ITEM: usunieto {result.rowcount:,} rekordow")
+        # 4. Usun ORDER_ITEM (dla zamowien z tej paczki)
+        session.execute(text(f"DELETE FROM ORDER_ITEM WHERE ORDER_ID IN ({order_ids_str})"))
 
-    # 4. CUSTOMER_ORDER
-    result = session.execute(text(f"DELETE FROM CUSTOMER_ORDER WHERE ORDER_ID IN ({order_ids_str})"))
-    print(f"   -> CUSTOMER_ORDER: usunieto {result.rowcount:,} rekordow")
+        # 5. Usun CUSTOMER_ORDER (ta paczka)
+        del_res = session.execute(text(f"DELETE FROM CUSTOMER_ORDER WHERE ORDER_ID IN ({order_ids_str})"))
+
+        total_deleted_orders += del_res.rowcount
+
+        # Wypisz postep co np. 5 paczek zeby nie spamowac konsoli
+        if (i // BATCH_SIZE) % 5 == 0:
+            print(f"   Postep: przetworzono {total_deleted_orders:,} / {orders_to_delete_count:,} zamowien...")
+
+    print(f"   Zakonczono usuwanie. Razem usunieto: {total_deleted_orders:,}")
 
     # Commit
-    print("\n[7/8] Zatwierdzanie zmian...")
+    print("\n[7/8] Zatwierdzanie zmian (COMMIT)...")
     session.commit()
 
     # Pokaz nowe statystyki
