@@ -34,24 +34,11 @@ ORIENT_SELECT_QUERIES = {
                               ORDER BY INVOICE_ID""",
 
     # Raport: Ilość sztuk per kraj - MATCH z agregacja
-    "report_quantity_per_country": """MATCH {class: CUSTOMER, as: c} -Customer_to_order-> {class: CUSTOMER_ORDER, as: co} -Order_to_order_item-> {class: ORDER_ITEM, as: oi} <-Product_to_order_item- {class: PRODUCT, as: p}
-                                   RETURN c.COUNTRY as Kraj, p.NAME as Nazwa_Produktu, sum(oi.QUANTITY) as Laczna_Ilosc_Sztuk
-                                   GROUP BY Kraj, Nazwa_Produktu
-                                   ORDER BY Kraj ASC, Laczna_Ilosc_Sztuk DESC""",
+    "report_quantity_per_country": """SELECT Kraj, Nazwa_Produktu, sum(Ilosc) as Laczna_Ilosc_Sztuk FROM (MATCH {class: CUSTOMER, as: c} -Customer_to_order-> {class: CUSTOMER_ORDER, as: co} -Order_to_order_item-> {class: ORDER_ITEM, as: oi} <-Product_to_order_item- {class: PRODUCT, as: p} RETURN c.COUNTRY as Kraj, p.NAME as Nazwa_Produktu, oi.QUANTITY as Ilosc) GROUP BY Kraj, Nazwa_Produktu ORDER BY Kraj ASC, Laczna_Ilosc_Sztuk DESC""",
 
     # Zlozony raport sprzedazowy - MATCH z filtrami i agregacja
-    "complex_sales_report": """MATCH
-                            {class: CUSTOMER, as: c} -Customer_to_order-> {class: CUSTOMER_ORDER, as: co, where: (STATUS = 'COMPLETED')} -Order_to_order_item-> {class: ORDER_ITEM, as: oi} <-Product_to_order_item- {class: PRODUCT, as: p},
-                            {as: co} -Order_to_invoice-> {class: INVOICE, as: i} -Invoice_to_payment-> {class: PAYMENT, as: pay, where: (CONFIRMED = 1)},
-                            {as: i} <-User_to_invoice- {class: SYS_USER, as: u}
-                            RETURN c.NAME as Nazwa_Klienta, c.COUNTRY as Kraj, u.USERNAME as Agent,
-                                   count(DISTINCT(co.ORDER_ID)) as Liczba_Zrealizowanych_Zamowien,
-                                   count(DISTINCT(p.PRODUCT_ID)) as Liczba_Unikalnych_Produktow,
-                                   sum(oi.QUANTITY) as Laczna_Ilosc_Sztuk,
-                                   sum(oi.QUANTITY * oi.UNIT_PRICE) as Wartosc_Zamowien_Brutto,
-                                   max(i.ISSUE_DATE) as Data_Ostatniej_Faktury
-                            GROUP BY Nazwa_Klienta, Kraj, Agent
-                            ORDER BY Wartosc_Zamowien_Brutto DESC"""
+    "complex_sales_report": """SELECT Nazwa_Klienta, Kraj, Agent, Liczba_Zrealizowanych_Zamowien, Liczba_Unikalnych_Produktow, Laczna_Ilosc_Sztuk, Wartosc_Zamowien_Brutto, Data_Ostatniej_Faktury FROM (SELECT Nazwa_Klienta, Kraj, Agent, distinct(Order_ID).size() as Liczba_Zrealizowanych_Zamowien, distinct(Product_ID).size() as Liczba_Unikalnych_Produktow, sum(Ilosc) as Laczna_Ilosc_Sztuk, sum(Wartosc_Pozycji) as Wartosc_Zamowien_Brutto, max(Data_Faktury) as Data_Ostatniej_Faktury FROM (SELECT c.NAME as Nazwa_Klienta, c.COUNTRY as Kraj, u.USERNAME as Agent, co.ORDER_ID as Order_ID, p.PRODUCT_ID as Product_ID, oi.QUANTITY as Ilosc, (oi.QUANTITY * oi.UNIT_PRICE) as Wartosc_Pozycji, i.ISSUE_DATE as Data_Faktury FROM (MATCH {class: CUSTOMER, as: c} -Customer_to_order-> {class: CUSTOMER_ORDER, as: co, where: (STATUS = 'COMPLETED')} -Order_to_order_item-> {class: ORDER_ITEM, as: oi} <-Product_to_order_item- {class: PRODUCT, as: p}, {as: co} -Order_to_invoice-> {class: INVOICE, as: i} -Invoice_to_payment-> {class: PAYMENT, as: pay, where: (CONFIRMED = 1)}, {as: i} <-User_to_invoice- {class: SYS_USER, as: u} RETURN c, co, oi, p, i, u)) GROUP BY Nazwa_Klienta, Kraj, Agent) WHERE Laczna_Ilosc_Sztuk > 10 ORDER BY Wartosc_Zamowien_Brutto.asDecimal() DESC
+"""
 }
 
 # ==========================================

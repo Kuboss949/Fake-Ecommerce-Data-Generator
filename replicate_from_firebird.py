@@ -4,7 +4,7 @@ Uruchamiany osobno, gdy generowanie danych zostalo zakonczone, ale replikacja si
 
 UWAGA: Ustawienie DROP_BEFORE_REPLICATE = True usunie WSZYSTKIE dane z docelowych baz!
 """
-
+import codecs
 import sys
 from collections import defaultdict
 from sqlalchemy import create_engine, select, inspect, text
@@ -21,11 +21,14 @@ from cassandra_tables import (
 )
 from cassandra.cqlengine.query import BatchQuery
 from cassandra.cluster import Cluster
-
+try:
+    codecs.lookup('cp1250')
+except LookupError:
+    import encodings.cp1250
 
 # ============== KONFIGURACJA ==============
-FIREBIRD_URL = "firebird+firebird://SYSDBA:masterkey@localhost:3050//firebird/data/company.fdb?charset=WIN1250"
-MARIADB_URL = "mysql+pymysql://root:root@localhost:3306/company?charset=utf8mb4"
+FIREBIRD_URL = "firebird+firebird://sysdba:admin123@localhost:3050//var/lib/firebird/data/mirror.fdb?charset=UTF8"
+MARIADB_URL = "mysql+pymysql://root:my-secret-pw@localhost:3306/company_db"
 ORIENTDB_HOST = "localhost"
 ORIENTDB_PORT = 2424
 ORIENTDB_USER = "root"

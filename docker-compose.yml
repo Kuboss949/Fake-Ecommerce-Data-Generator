@@ -25,17 +25,16 @@ services:
   # ==========================================
   orientdb:
     build:
-      context: ./orientdb # Ścieżka do folderu z Dockerfile OrientDB
+      context: ./orientdb
       dockerfile: Dockerfile
     container_name: erp_orientdb
     environment:
-      # Uwaga: Twój Dockerfile OrientDB jest bardzo surowy i może nie obsługiwać
-      # automatycznego ustawiania hasła przez zmienną ENV bez dodatkowego skryptu.
-      # Jeśli hasło nie zadziała, OrientDB poprosi o nie w logach lub ustawi domyślne.
       ORIENTDB_ROOT_PASSWORD: root
+      ORIENTDB_OPTS_MEMORY: "-Xms1G -Xmx4G"
+    mem_limit: 5g
     ports:
-      - "2424:2424"  # Port binarny (dla Pythona)
-      - "2480:2480"  # OrientDB Studio (przeglądarka)
+      - "2424:2424"
+      - "2480:2480"
     volumes:
       - orientdb_data:/orientdb/databases
       - orientdb_config:/orientdb/config

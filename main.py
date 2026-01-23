@@ -10,7 +10,7 @@ except LookupError:
     import encodings.cp1250
 
 
-init = SessionInitiator(drop_data=True)
+init = SessionInitiator(drop_data=False)
 
 def main():
     print("="*70)
@@ -38,21 +38,21 @@ def main():
     # ==========================================
     # GENEROWANIE DANYCH
     # ==========================================
-    print("\n[FAZA 2] GENEROWANIE DANYCH")
-    print("-"*70)
-
-    generator = FakeDataGenerator(
-        main_session=session_fb,
-        mirror_session=session_maria,
-        orient_client=orient_client
-    )
-
-    with ExecutionTimer("Generowanie i replikacja danych"):
-        generator.run_generation(
-            num_users=1000,
-            num_customers=2000,
-            num_orders=45000
-        )
+    # print("\n[FAZA 2] GENEROWANIE DANYCH")
+    # print("-"*70)
+    #
+    # generator = FakeDataGenerator(
+    #     main_session=session_fb,
+    #     mirror_session=session_maria,
+    #     orient_client=orient_client
+    # )
+    #
+    # with ExecutionTimer("Generowanie i replikacja danych"):
+    #     generator.run_generation(
+    #         num_users=1000,
+    #         num_customers=5000,
+    #         num_orders=95000
+    #     )
 
 
     # ==========================================

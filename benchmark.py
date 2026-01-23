@@ -645,11 +645,11 @@ def run_benchmark(fb_session, maria_session, orient_client):
         with ExecutionTimer("SELECT benchmarks"):
             run_select_benchmarks(fb_session, maria_session, orient_client, cassandra_session)
 
-        with ExecutionTimer("DDL benchmarks"):
-            run_ddl_benchmarks(fb_session, maria_session, orient_client, cassandra_session)
-
-        with ExecutionTimer("DML benchmarks"):
-            run_dml_benchmarks(fb_session, maria_session, orient_client, cassandra_session)
+        # with ExecutionTimer("DDL benchmarks"):
+        #     run_ddl_benchmarks(fb_session, maria_session, orient_client, cassandra_session)
+        #
+        # with ExecutionTimer("DML benchmarks"):
+        #     run_dml_benchmarks(fb_session, maria_session, orient_client, cassandra_session)
 
         # Podsumowanie i zapis
         print_summary()

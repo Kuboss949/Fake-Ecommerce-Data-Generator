@@ -65,10 +65,9 @@ CQL_SELECT_QUERIES = {
     # Złożony raport sprzedażowy (Customer 360)
     # Dane są już policzone w tabeli CustomerLeaderboard
     "complex_sales_report": """
-                            SELECT customer_name, agent_username, gross_value_brutto, orders_count
-                            FROM customer_performance_leaderboard
-                            WHERE country = '{country}'
-                            """
+                        SELECT customer_name, agent_username, gross_value_brutto, orders_count
+                        FROM customer_performance_leaderboard
+                        """
 }
 
 # ==========================================

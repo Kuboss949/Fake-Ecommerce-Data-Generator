@@ -18,8 +18,8 @@ class SessionInitiator:
             print("Usuwanie struktury Firebird...")
             Base.metadata.drop_all(engine_fb)
 
-        # print("Tworzenie tabel w Firebird...")
-        # Base.metadata.create_all(engine_fb)
+        print("Tworzenie tabel w Firebird...")
+        Base.metadata.create_all(engine_fb)
         session_fb = SessionFb()
         return session_fb
 
