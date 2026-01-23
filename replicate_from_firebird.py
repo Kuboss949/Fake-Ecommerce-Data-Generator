@@ -102,7 +102,21 @@ def drop_cassandra_data():
     print("[Cassandra] Usuwanie danych...")
 
     cluster = Cluster(CASSANDRA_HOSTS)
-    session = cluster.connect(CASSANDRA_KEYSPACE)
+    # Najpierw polacz bez keyspace zeby sprawdzic czy istnieje
+    session = cluster.connect()
+
+    # Sprawdz czy keyspace istnieje, jesli nie - utworz
+    try:
+        session.execute(f"""
+            CREATE KEYSPACE IF NOT EXISTS {CASSANDRA_KEYSPACE}
+            WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': 1}}
+        """)
+        session.set_keyspace(CASSANDRA_KEYSPACE)
+    except Exception as e:
+        print(f"   -> Keyspace: {e}")
+        session.shutdown()
+        cluster.shutdown()
+        return
 
     # Zwykle tabele - TRUNCATE
     regular_tables = [
@@ -612,11 +626,30 @@ def replicate_to_cassandra(source_session):
     print("\n========== REPLIKACJA DO CASSANDRA ==========")
 
     from cassandra.cqlengine import connection
-    from cassandra.cqlengine.management import sync_table
+    from cassandra.cqlengine.management import sync_table, create_keyspace_simple
 
-    # Polacz z Cassandra
+    # Polacz z Cassandra - najpierw bez keyspace
     print("[Cassandra] Laczenie...")
+    connection.setup(CASSANDRA_HOSTS, 'system', protocol_version=4)
+
+    # Utworz keyspace jesli nie istnieje
+    print("[Cassandra] Tworzenie keyspace...")
+    create_keyspace_simple(CASSANDRA_KEYSPACE, replication_factor=1)
+
+    # Teraz polacz z keyspace
     connection.setup(CASSANDRA_HOSTS, CASSANDRA_KEYSPACE, protocol_version=4)
+
+    # Synchronizuj tabele (utworz jesli nie istnieja)
+    print("[Cassandra] Synchronizacja tabel...")
+    sync_table(UsersByRole)
+    sync_table(CustomerCountByCity)
+    sync_table(PaymentsByAmountRange)
+    sync_table(ProductStockAggregates)
+    sync_table(AllInvoicesWithDetails)
+    sync_table(SalesStatsByCountryAll)
+    sync_table(CustomerLeaderboardAll)
+    sync_table(InvoicesByCustomerName)
+    sync_table(OrderItemsByProduct)
 
     # Potrzebujemy tez zwyklej sesji dla counterow
     cluster = Cluster(CASSANDRA_HOSTS)
