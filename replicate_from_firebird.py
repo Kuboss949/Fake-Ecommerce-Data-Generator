@@ -13,9 +13,9 @@ import pyorientdb as pyorient
 
 from modele import Base, SysUser, Customer, Product, CustomerOrder, OrderItem, Invoice, Payment
 from cassandra_tables import (
-    UsersByRole, CustomersByCity, ProductsByPrice,
-    InvoiceFullDetails, PaymentsByYearAmount,
-    SalesStatsByCountry, CustomerLeaderboard,
+    UsersByRole, CustomerCountByCity, PaymentsByAmountRange,
+    ProductStockAggregates, AllInvoicesWithDetails,
+    SalesStatsByCountryAll, CustomerLeaderboardAll,
     InvoicesByCustomerName, OrderItemsByProduct,
     init_cassandra_schema
 )
@@ -98,24 +98,54 @@ def drop_orientdb_data(client):
 
 
 def drop_cassandra_data():
-    """Usuwa wszystkie dane z tabel Cassandra (TRUNCATE)."""
+    """Usuwa wszystkie dane z tabel Cassandra (TRUNCATE lub DROP/CREATE dla counterow)."""
     print("[Cassandra] Usuwanie danych...")
 
     cluster = Cluster(CASSANDRA_HOSTS)
     session = cluster.connect(CASSANDRA_KEYSPACE)
 
-    tables = [
-        'users_by_role', 'customers_by_city', 'payments_by_year_amount',
-        'products_by_price', 'invoice_full_details', 'sales_stats_by_country_product',
-        'customer_performance_leaderboard', 'invoices_by_customer_name', 'order_items_by_product'
+    # Zwykle tabele - TRUNCATE
+    regular_tables = [
+        'users_by_role', 'payments_by_amount_range',
+        'all_invoices_with_details', 'sales_stats_all',
+        'customer_leaderboard_all', 'invoices_by_customer_name', 'order_items_by_product'
     ]
 
-    for table in tables:
+    for table in regular_tables:
         try:
             session.execute(f"TRUNCATE {table}")
             print(f"   -> TRUNCATE {table} OK")
         except Exception as e:
             print(f"   -> TRUNCATE {table} SKIP: {e}")
+
+    # Tabele z counterami - DROP i CREATE (TRUNCATE nie dziala dla counterow)
+    counter_tables = [
+        ('customer_count_by_city', """
+            CREATE TABLE IF NOT EXISTS customer_count_by_city (
+                bucket text,
+                city text,
+                customer_count counter,
+                PRIMARY KEY (bucket, city)
+            )
+        """),
+        ('product_stock_aggregates', """
+            CREATE TABLE IF NOT EXISTS product_stock_aggregates (
+                price_bucket text,
+                dummy int,
+                total_stock counter,
+                PRIMARY KEY (price_bucket, dummy)
+            )
+        """)
+    ]
+
+    for table_name, create_stmt in counter_tables:
+        try:
+            session.execute(f"DROP TABLE IF EXISTS {table_name}")
+            print(f"   -> DROP TABLE {table_name} OK")
+            session.execute(create_stmt)
+            print(f"   -> CREATE TABLE {table_name} OK")
+        except Exception as e:
+            print(f"   -> {table_name} SKIP: {e}")
 
     session.shutdown()
     cluster.shutdown()
@@ -578,7 +608,7 @@ def replicate_to_orientdb(source_session):
 
 
 def replicate_to_cassandra(source_session):
-    """Replikuje dane z Firebirda do Cassandry."""
+    """Replikuje dane z Firebirda do Cassandry - NOWA STRUKTURA TABEL."""
     print("\n========== REPLIKACJA DO CASSANDRA ==========")
 
     from cassandra.cqlengine import connection
@@ -587,11 +617,31 @@ def replicate_to_cassandra(source_session):
     # Polacz z Cassandra
     print("[Cassandra] Laczenie...")
     connection.setup(CASSANDRA_HOSTS, CASSANDRA_KEYSPACE, protocol_version=4)
+
+    # Potrzebujemy tez zwyklej sesji dla counterow
+    cluster = Cluster(CASSANDRA_HOSTS)
+    cql_session = cluster.connect(CASSANDRA_KEYSPACE)
     print("[Cassandra] Polaczono!")
 
-    # 1. USERS BY ROLE
-    print("   -> Dodawanie Users...")
+    # Pobierz dane zrodlowe
     users = source_session.execute(select(SysUser)).scalars().all()
+    customers = source_session.execute(select(Customer)).scalars().all()
+    products = source_session.execute(select(Product)).scalars().all()
+    payments = source_session.execute(select(Payment)).scalars().all()
+    invoices = source_session.execute(select(Invoice)).scalars().all()
+    orders = source_session.execute(select(CustomerOrder)).scalars().all()
+    order_items = source_session.execute(select(OrderItem)).scalars().all()
+
+    # Budujemy mapy dla szybkiego dostepu
+    customer_map = {c.CUSTOMER_ID: c for c in customers}
+    payment_map = {p.INVOICE_ID: p for p in payments}
+    product_map = {p.PRODUCT_ID: p for p in products}
+    user_map = {u.USER_ID: u.USERNAME for u in users}
+    order_to_customer = {o.ORDER_ID: customer_map.get(o.CUSTOMER_ID) for o in orders}
+    order_to_invoice = {inv.ORDER_ID: inv.INVOICE_ID for inv in invoices}
+
+    # 1. USERS BY ROLE (bez zmian)
+    print("   -> Dodawanie Users by Role...")
     batch = []
     for u in users:
         batch.append({
@@ -612,60 +662,37 @@ def replicate_to_cassandra(source_session):
                 UsersByRole.batch(b).create(**item)
     print(f"      Dodano {len(users)} uzytkownikow")
 
-    # 2. CUSTOMERS BY CITY
-    print("   -> Dodawanie Customers...")
-    customers = source_session.execute(select(Customer)).scalars().all()
-    batch = []
+    # 2. CUSTOMER COUNT BY CITY (COUNTER) - NOWA TABELA
+    print("   -> Aktualizowanie Customer Count by City (counters)...")
+    city_counts = defaultdict(int)
     for c in customers:
-        batch.append({
-            'city': c.CITY,
-            'customer_id': c.CUSTOMER_ID,
-            'name': c.NAME,
-            'email': c.EMAIL
-        })
-        if len(batch) >= 50:
-            with BatchQuery() as b:
-                for item in batch:
-                    CustomersByCity.batch(b).create(**item)
-            batch = []
-    if batch:
-        with BatchQuery() as b:
-            for item in batch:
-                CustomersByCity.batch(b).create(**item)
-    print(f"      Dodano {len(customers)} klientow")
+        city_counts[c.CITY] += 1
 
-    # 3. PRODUCTS BY PRICE
-    print("   -> Dodawanie Products...")
-    products = source_session.execute(select(Product)).scalars().all()
-    batch = []
-    for p in products:
-        batch.append({
-            'bucket': 'all_products',
-            'price': float(p.PRICE),
-            'product_id': p.PRODUCT_ID,
-            'name': p.NAME,
-            'stock_quantity': p.STOCK_QUANTITY
-        })
-        if len(batch) >= 50:
-            with BatchQuery() as b:
-                for item in batch:
-                    ProductsByPrice.batch(b).create(**item)
-            batch = []
-    if batch:
-        with BatchQuery() as b:
-            for item in batch:
-                ProductsByPrice.batch(b).create(**item)
-    print(f"      Dodano {len(products)} produktow")
+    for city, count in city_counts.items():
+        cql_session.execute(
+            "UPDATE customer_count_by_city SET customer_count = customer_count + %s WHERE bucket = 'all' AND city = %s",
+            (count, city)
+        )
+    print(f"      Zaktualizowano {len(city_counts)} miast")
 
-    # 4. PAYMENTS BY YEAR/AMOUNT
-    print("   -> Dodawanie Payments...")
-    payments = source_session.execute(select(Payment)).scalars().all()
+    # 3. PAYMENTS BY AMOUNT RANGE - NOWA TABELA
+    print("   -> Dodawanie Payments by Amount Range...")
     batch = []
     for p in payments:
+        amount = float(p.AMOUNT)
+        # Klasyfikuj do bucketa
+        if amount < 10000:
+            bucket = 'under_10k'
+        elif amount <= 40000:
+            bucket = '10k-40k'
+        else:
+            bucket = 'over_40k'
+
         batch.append({
-            'year': p.PAYMENT_DATE.year,
-            'amount': float(p.AMOUNT),
+            'amount_bucket': bucket,
+            'amount': amount,
             'payment_id': p.PAYMENT_ID,
+            'invoice_id': p.INVOICE_ID,
             'method': p.METHOD,
             'payment_date': p.PAYMENT_DATE,
             'confirmed': bool(p.CONFIRMED)
@@ -673,36 +700,50 @@ def replicate_to_cassandra(source_session):
         if len(batch) >= 50:
             with BatchQuery() as b:
                 for item in batch:
-                    PaymentsByYearAmount.batch(b).create(**item)
+                    PaymentsByAmountRange.batch(b).create(**item)
             batch = []
     if batch:
         with BatchQuery() as b:
             for item in batch:
-                PaymentsByYearAmount.batch(b).create(**item)
+                PaymentsByAmountRange.batch(b).create(**item)
     print(f"      Dodano {len(payments)} platnosci")
 
-    # 5. INVOICE FULL DETAILS (denormalizowane z Customer i Payment)
-    print("   -> Dodawanie Invoice Details...")
-    invoices = source_session.execute(select(Invoice)).scalars().all()
+    # 4. PRODUCT STOCK AGGREGATES (COUNTER) - NOWA TABELA
+    print("   -> Aktualizowanie Product Stock Aggregates (counters)...")
+    stock_by_bucket = defaultdict(int)
+    for p in products:
+        price = float(p.PRICE)
+        if price < 100:
+            bucket = 'under_100'
+        elif price <= 500:
+            bucket = '100_500'
+        else:
+            bucket = 'over_500'
+        stock_by_bucket[bucket] += p.STOCK_QUANTITY
 
-    # Budujemy mapy dla szybkiego dostepu
-    customer_map = {c.CUSTOMER_ID: c for c in customers}
-    payment_map = {}
-    for p in payments:
-        payment_map[p.INVOICE_ID] = p
+    for bucket, total_stock in stock_by_bucket.items():
+        cql_session.execute(
+            "UPDATE product_stock_aggregates SET total_stock = total_stock + %s WHERE price_bucket = %s AND dummy = 1",
+            (total_stock, bucket)
+        )
+    print(f"      Zaktualizowano {len(stock_by_bucket)} bucketow cenowych")
 
+    # 5. ALL INVOICES WITH DETAILS - NOWA TABELA (partycjonowana po roku)
+    print("   -> Dodawanie All Invoices with Details...")
     batch = []
     for i in invoices:
         customer = customer_map.get(i.CUSTOMER_ID)
         payment = payment_map.get(i.INVOICE_ID)
+        year = i.ISSUE_DATE.year if hasattr(i.ISSUE_DATE, 'year') else i.ISSUE_DATE.date().year
 
         batch.append({
+            'year': year,
             'invoice_id': i.INVOICE_ID,
             'invoice_number': i.INVOICE_NUMBER,
-            'issue_date': i.ISSUE_DATE.date() if hasattr(i.ISSUE_DATE, 'date') else i.ISSUE_DATE,
-            'due_date': i.DUE_DATE.date() if hasattr(i.DUE_DATE, 'date') else i.DUE_DATE,
             'total_amount': float(i.TOTAL_AMOUNT),
             'status': i.STATUS,
+            'issue_date': i.ISSUE_DATE.date() if hasattr(i.ISSUE_DATE, 'date') else i.ISSUE_DATE,
+            'due_date': i.DUE_DATE.date() if hasattr(i.DUE_DATE, 'date') else i.DUE_DATE,
             'past_due': False,
             'customer_id': i.CUSTOMER_ID,
             'customer_name': customer.NAME if customer else 'Unknown',
@@ -714,15 +755,15 @@ def replicate_to_cassandra(source_session):
         if len(batch) >= 50:
             with BatchQuery() as b:
                 for item in batch:
-                    InvoiceFullDetails.batch(b).create(**item)
+                    AllInvoicesWithDetails.batch(b).create(**item)
             batch = []
     if batch:
         with BatchQuery() as b:
             for item in batch:
-                InvoiceFullDetails.batch(b).create(**item)
+                AllInvoicesWithDetails.batch(b).create(**item)
     print(f"      Dodano {len(invoices)} faktur")
 
-    # 6. INVOICES BY CUSTOMER NAME
+    # 6. INVOICES BY CUSTOMER NAME (pomocnicza)
     print("   -> Dodawanie Invoices by Customer Name...")
     batch = []
     for i in invoices:
@@ -744,16 +785,8 @@ def replicate_to_cassandra(source_session):
                 InvoicesByCustomerName.batch(b).create(**item)
     print(f"      Dodano {len(invoices)} wpisow")
 
-    # 7. ORDER ITEMS BY PRODUCT
+    # 7. ORDER ITEMS BY PRODUCT (pomocnicza)
     print("   -> Dodawanie Order Items by Product...")
-    order_items = source_session.execute(select(OrderItem)).scalars().all()
-
-    # Mapujemy ORDER_ID -> INVOICE_ID
-    orders = source_session.execute(select(CustomerOrder)).scalars().all()
-    order_to_invoice = {}
-    for inv in invoices:
-        order_to_invoice[inv.ORDER_ID] = inv.INVOICE_ID
-
     batch = []
     for oi in order_items:
         invoice_id = order_to_invoice.get(oi.ORDER_ID, 0)
@@ -774,29 +807,20 @@ def replicate_to_cassandra(source_session):
                 OrderItemsByProduct.batch(b).create(**item)
     print(f"      Dodano {len(order_items)} pozycji")
 
-    # 8. SALES STATS BY COUNTRY (agregacja)
-    print("   -> Agregowanie Sales Stats...")
-    from collections import defaultdict
+    # 8. SALES STATS ALL - NOWA TABELA (bucket='all')
+    print("   -> Agregowanie Sales Stats All...")
     stats_cache = defaultdict(int)
-
-    # Mapujemy ORDER_ID -> CUSTOMER
-    order_to_customer = {}
-    for o in orders:
-        order_to_customer[o.ORDER_ID] = customer_map.get(o.CUSTOMER_ID)
-
-    # Mapujemy PRODUCT_ID -> NAME
-    product_map = {p.PRODUCT_ID: p.NAME for p in products}
-
     for oi in order_items:
         customer = order_to_customer.get(oi.ORDER_ID)
         if customer:
             country = customer.COUNTRY
-            prod_name = product_map.get(oi.PRODUCT_ID, 'Unknown')
+            prod_name = product_map.get(oi.PRODUCT_ID).NAME if product_map.get(oi.PRODUCT_ID) else 'Unknown'
             stats_cache[(country, prod_name)] += oi.QUANTITY
 
     batch = []
     for (country, prod_name), qty in stats_cache.items():
         batch.append({
+            'bucket': 'all',
             'country': country,
             'product_name': prod_name,
             'total_quantity_sum': qty,
@@ -805,46 +829,46 @@ def replicate_to_cassandra(source_session):
         if len(batch) >= 50:
             with BatchQuery() as b:
                 for item in batch:
-                    SalesStatsByCountry.batch(b).create(**item)
+                    SalesStatsByCountryAll.batch(b).create(**item)
             batch = []
     if batch:
         with BatchQuery() as b:
             for item in batch:
-                SalesStatsByCountry.batch(b).create(**item)
+                SalesStatsByCountryAll.batch(b).create(**item)
     print(f"      Dodano {len(stats_cache)} statystyk")
 
-    # 9. CUSTOMER LEADERBOARD (agregacja)
-    print("   -> Agregowanie Customer Leaderboard...")
+    # 9. CUSTOMER LEADERBOARD ALL - NOWA TABELA (bucket='all')
+    print("   -> Agregowanie Customer Leaderboard All...")
     leaderboard = defaultdict(lambda: {
         'gross_value': 0.0,
         'orders_count': 0,
         'items_count': 0,
         'unique_products': set(),
         'last_invoice': None,
-        'agent': 'Unknown'
+        'agent': 'Unknown',
+        'country': ''
     })
-
-    # Mapujemy USER_ID -> USERNAME
-    user_map = {u.USER_ID: u.USERNAME for u in users}
 
     for inv in invoices:
         if inv.STATUS == 'PAID':
             customer = customer_map.get(inv.CUSTOMER_ID)
             if customer:
-                key = (customer.COUNTRY, customer.NAME)
+                key = customer.NAME
                 leaderboard[key]['gross_value'] += float(inv.TOTAL_AMOUNT)
                 leaderboard[key]['orders_count'] += 1
                 leaderboard[key]['agent'] = user_map.get(inv.CREATED_BY, 'Unknown')
+                leaderboard[key]['country'] = customer.COUNTRY
                 if leaderboard[key]['last_invoice'] is None or inv.ISSUE_DATE > leaderboard[key]['last_invoice']:
                     leaderboard[key]['last_invoice'] = inv.ISSUE_DATE
 
     batch = []
-    for (country, customer_name), data in leaderboard.items():
+    for customer_name, data in leaderboard.items():
         if data['orders_count'] > 0:
             batch.append({
-                'country': country,
+                'bucket': 'all',
                 'gross_value_brutto': data['gross_value'],
                 'customer_name': customer_name,
+                'country': data['country'],
                 'agent_username': data['agent'],
                 'orders_count': data['orders_count'],
                 'unique_products_count': len(data['unique_products']),
@@ -854,14 +878,17 @@ def replicate_to_cassandra(source_session):
             if len(batch) >= 50:
                 with BatchQuery() as b:
                     for item in batch:
-                        CustomerLeaderboard.batch(b).create(**item)
+                        CustomerLeaderboardAll.batch(b).create(**item)
                 batch = []
     if batch:
         with BatchQuery() as b:
             for item in batch:
-                CustomerLeaderboard.batch(b).create(**item)
+                CustomerLeaderboardAll.batch(b).create(**item)
     print(f"      Dodano {len(leaderboard)} klientow do leaderboarda")
 
+    # Zamknij sesje
+    cql_session.shutdown()
+    cluster.shutdown()
     print("[Cassandra] Replikacja zakonczona!")
 
 

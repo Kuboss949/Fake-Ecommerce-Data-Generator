@@ -2,8 +2,8 @@
 
 """
 Ten plik przechowuje zapytania CQL dla bazy Cassandra.
-Uwaga: W Cassandrze kluczowe jest podawanie Partition Key (np. role, city, year) w klauzuli WHERE.
-Bez tego zapytania będą wymagały 'ALLOW FILTERING', co jest zabójcze dla wydajności.
+NOWA STRUKTURA - zapytania dopasowane do tabel z bucketami pozwalajacymi
+pobierac wszystkie dane bez znajomosci partition key.
 """
 
 # ==========================================
@@ -11,7 +11,7 @@ Bez tego zapytania będą wymagały 'ALLOW FILTERING', co jest zabójcze dla wyd
 # ==========================================
 CQL_SELECT_QUERIES = {
     # SQL: SELECT ... FROM SYS_USER WHERE ROLE = 'ACCOUNTANT'
-    # Wymaga podania roli (Partition Key)
+    # Wymaga podania roli (Partition Key) - bez zmian
     "accountants": """
                    SELECT *
                    FROM users_by_role
@@ -19,55 +19,62 @@ CQL_SELECT_QUERIES = {
                    """,
 
     # SQL: SELECT COUNT(*), CITY FROM CUSTOMER GROUP BY CITY
-    # W Cassandrze zazwyczaj pytamy o konkretne miasto.
-    # Agregacja dla WSZYSTKICH miast naraz robiona jest po stronie aplikacji lub Sparka.
-    "customers_in_city": """
-                         SELECT count(*)
-                         FROM customers_by_city
-                         WHERE city = '{city}'
+    # NOWE: Pobiera wszystkie miasta z gotowymi licznikami
+    "customers_by_city": """
+                         SELECT city, customer_count
+                         FROM customer_count_by_city
+                         WHERE bucket = 'all'
                          """,
 
     # SQL: SELECT ... FROM PAYMENT WHERE AMOUNT BETWEEN 10000 AND 40000
-    # Musimy znać ROK (Partition Key), żeby posortować po kwocie (Clustering Key)
+    # NOWE: Pobiera wszystkie platnosci z zakresu 10k-40k (niezaleznie od roku)
     "payments_range": """
-                      SELECT *
-                      FROM payments_by_year_amount
-                      WHERE year = {year}
-                        AND amount >= 10000
-                        AND amount <= 40000
+                      SELECT payment_id, invoice_id, payment_date, amount, method, confirmed
+                      FROM payments_by_amount_range
+                      WHERE amount_bucket = '10k-40k'
                       """,
 
     # SQL: SELECT SUM(STOCK_QUANTITY) FROM PRODUCT WHERE PRICE < 100
-    # Używamy sztucznego bucketa 'all_products' jako Partition Key
-    "products_low_price": """
-                          SELECT name, stock_quantity, price
-                          FROM products_by_price
-                          WHERE bucket = 'all_products'
-                            AND price < 100
+    # NOWE: Pobiera gotowa sume z tabeli agregatow
+    "products_low_price_stock": """
+                          SELECT total_stock
+                          FROM product_stock_aggregates
+                          WHERE price_bucket = 'under_100'
                           """,
 
     # SQL: SELECT ... FROM INVOICE JOIN CUSTOMER ...
-    # W Cassandrze dane są zdenormalizowane - wszystko jest w jednej tabeli
-    "invoice_details": """
-                       SELECT invoice_number, total_amount, customer_name, payment_method
-                       FROM invoice_full_details
-                       WHERE invoice_id = {invoice_id}
+    # NOWE: Pobiera wszystkie faktury (partycjonowane po roku)
+    "invoices_with_customers": """
+                       SELECT invoice_number, total_amount, customer_name
+                       FROM all_invoices_with_details
+                       WHERE year IN (2023, 2024, 2025, 2026)
                        """,
 
-    # Raport: Ilość sztuk per kraj (z tabeli SalesStatsByCountry)
-    # Dane są już policzone przy wpisywaniu (write-time aggregation)
+    # SQL: SELECT ... FROM INVOICE LEFT JOIN PAYMENT ...
+    # NOWE: Pobiera wszystkie faktury z danymi platnosci
+    "invoices_with_payments": """
+                       SELECT invoice_id, invoice_number, payment_method, payment_amount
+                       FROM all_invoices_with_details
+                       WHERE year IN (2023, 2024, 2025, 2026)
+                       """,
+
+    # SQL: Raport ilosc sztuk per kraj
+    # NOWE: bucket='all' pozwala pobrac wszystkie kraje
     "report_quantity_per_country": """
-                                   SELECT product_name, total_quantity_sum
-                                   FROM sales_stats_by_country_product
-                                   WHERE country = '{country}'
+                                   SELECT country, product_name, total_quantity_sum
+                                   FROM sales_stats_all
+                                   WHERE bucket = 'all'
                                    """,
 
-    # Złożony raport sprzedażowy (Customer 360)
-    # Dane są już policzone w tabeli CustomerLeaderboard
+    # SQL: Zlozony raport sprzedazowy (Customer 360)
+    # NOWE: bucket='all' pozwala pobrac wszystkich klientow
     "complex_sales_report": """
-                        SELECT customer_name, agent_username, gross_value_brutto, orders_count
-                        FROM customer_performance_leaderboard
-                        """
+                            SELECT customer_name, country, agent_username, orders_count,
+                                   unique_products_count, total_items_quantity,
+                                   gross_value_brutto, last_invoice_date
+                            FROM customer_leaderboard_all
+                            WHERE bucket = 'all'
+                            """
 }
 
 # ==========================================
@@ -76,7 +83,7 @@ CQL_SELECT_QUERIES = {
 CQL_DDL_QUERIES = {
     # Cassandra nie wspiera IF NOT EXISTS dla ADD, wiec ignorujemy blad jesli kolumna istnieje
     "add_column_past_due": """
-                           ALTER TABLE invoice_full_details
+                           ALTER TABLE all_invoices_with_details
                                ADD past_due boolean
                            """
 }
@@ -84,40 +91,38 @@ CQL_DDL_QUERIES = {
 # ==========================================
 # ZAPYTANIA AKTUALIZUJACE I KASUJACE
 # ==========================================
-# W Cassandrze nie ma "UPDATE ... WHERE data < ..." dla całej tabeli.
-# Musisz pobrać ID w aplikacji i aktualizować po ID.
+# W Cassandrze nie ma "UPDATE ... WHERE data < ..." dla calej tabeli.
+# Musisz pobrac ID w aplikacji i aktualizowac po ID.
 CQL_DML_QUERIES = {
-    # 1. UPDATE pojedynczej faktury (wymaga ID)
+    # 1. UPDATE pojedynczej faktury (wymaga year + invoice_id)
     "mark_past_due_single": """
-                            UPDATE invoice_full_details
+                            UPDATE all_invoices_with_details
                             SET past_due = true
-                            WHERE invoice_id = {invoice_id}
+                            WHERE year = {year} AND invoice_id = {invoice_id}
                             """,
 
-    # 2. UPDATE po nazwisku (Apolonia Banak) - KROK 1: Znajdź ID
+    # 2. UPDATE po nazwisku (Apolonia Banak) - KROK 1: Znajdz ID
     "find_invoice_ids_by_name": """
                                 SELECT invoice_id, total_amount
                                 FROM invoices_by_customer_name
                                 WHERE customer_name = '{customer_name}'
                                 """,
 
-    # 2. UPDATE po nazwisku - KROK 2: Zaktualizuj konkretną fakturę (w tabeli głównej)
+    # 2. UPDATE po nazwisku - KROK 2: Zaktualizuj konkretna fakture
     "update_invoice_amount": """
-                             UPDATE invoice_full_details
+                             UPDATE all_invoices_with_details
                              SET total_amount = 0
-                             WHERE invoice_id = {invoice_id}
+                             WHERE year = {year} AND invoice_id = {invoice_id}
                              """,
-    # Uwaga: Należy też zaktualizować tabelę pomocniczą invoices_by_customer_name,
-    # żeby zachować spójność! Cassandra nie robi tego sama.
 
-    # 3. DELETE po produkcie - KROK 1: Znajdź, gdzie ten produkt występuje
+    # 3. DELETE po produkcie - KROK 1: Znajdz, gdzie ten produkt wystepuje
     "find_orders_with_product": """
                                 SELECT invoice_id
                                 FROM order_items_by_product
                                 WHERE product_id = {product_id}
                                 """,
 
-    # 3. DELETE po produkcie - KROK 2: Usuń wpis z indeksu
+    # 3. DELETE po produkcie - KROK 2: Usun wpis z indeksu
     "delete_product_lookup": """
                              DELETE
                              FROM order_items_by_product
@@ -130,8 +135,9 @@ CQL_DML_QUERIES = {
         TRUNCATE order_items_by_product
     """,
 
-    # 5. DELETE ALL PRODUCTS
+    # 5. DELETE ALL PRODUCTS - UWAGA: nie mozna truncate tabeli z counterami
+    # Trzeba uzyc DELETE dla kazdego wiersza lub drop/recreate
     "delete_all_products": """
-        TRUNCATE products_by_price
+        TRUNCATE payments_by_amount_range
     """
 }
