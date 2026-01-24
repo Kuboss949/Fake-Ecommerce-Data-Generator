@@ -782,10 +782,10 @@ def benchmark_sql_insert_batch(session, table_name, data, db_name):
         }
 
 
-def benchmark_orient_insert_batch(client, table_name, data):
+def benchmark_orient_insert_batch(client, table_name, data, id_offset=500000):
     """
     Wykonuje batch INSERT dla OrientDB.
-    OrientDB uzywa INSERT INTO ... CONTENT {...} lub INSERT INTO ... SET ...
+    OrientDB wymaga jawnych ID (CUSTOMER_ID, INVOICE_ID) - ma na nich unikalne indeksy.
     """
     count = len(data)
     print(f"   OrientDB: INSERT {table_name} ({count} rows)...", end=" ", flush=True)
@@ -794,7 +794,7 @@ def benchmark_orient_insert_batch(client, table_name, data):
         start_time = time.time()
 
         if table_name == 'CUSTOMER':
-            for row in data:
+            for i, row in enumerate(data):
                 # Escape single quotes for OrientDB
                 name = row['name'].replace("'", "\\'")
                 email = row['email'].replace("'", "\\'")
@@ -802,21 +802,23 @@ def benchmark_orient_insert_batch(client, table_name, data):
                 address = row['address'].replace("'", "\\'")
                 city = row['city'].replace("'", "\\'")
                 country = row['country'].replace("'", "\\'")
+                customer_id = id_offset + i  # Unique ID for benchmark
 
                 query = f"""
-                    INSERT INTO CUSTOMER SET NAME = '{name}', EMAIL = '{email}',
+                    INSERT INTO CUSTOMER SET CUSTOMER_ID = {customer_id}, NAME = '{name}', EMAIL = '{email}',
                     PHONE = '{phone}', ADDRESS = '{address}', CITY = '{city}', COUNTRY = '{country}'
                 """
                 execute_orient_command(client, query)
 
         elif table_name == 'INVOICE':
-            for row in data:
+            for i, row in enumerate(data):
                 invoice_number = row['invoice_number'].replace("'", "\\'")
                 status = row['status'].replace("'", "\\'")
+                invoice_id = id_offset + i  # Unique ID for benchmark
                 query = f"""
-                    INSERT INTO INVOICE SET INVOICE_NUMBER = '{invoice_number}', CUSTOMER_ID = {row['customer_id']},
-                    ISSUE_DATE = '{row['issue_date']}', DUE_DATE = '{row['due_date']}',
-                    TOTAL_AMOUNT = {row['total_amount']}, STATUS = '{status}'
+                    INSERT INTO INVOICE SET INVOICE_ID = {invoice_id}, INVOICE_NUMBER = '{invoice_number}',
+                    CUSTOMER_ID = {row['customer_id']}, ISSUE_DATE = '{row['issue_date']}',
+                    DUE_DATE = '{row['due_date']}', TOTAL_AMOUNT = {row['total_amount']}, STATUS = '{status}'
                 """
                 execute_orient_command(client, query)
 
@@ -851,7 +853,7 @@ def benchmark_orient_insert_batch(client, table_name, data):
         }
 
 
-def benchmark_cassandra_insert_batch(session, table_name, data):
+def benchmark_cassandra_insert_batch(session, table_name, data, id_offset=100000):
     """
     Wykonuje batch INSERT dla Cassandra.
     Uwaga: Cassandra ma zdenormalizowana strukture tabel.
@@ -871,7 +873,7 @@ def benchmark_cassandra_insert_batch(session, table_name, data):
                 name = row['name'].replace("'", "''")
                 email = row['email'].replace("'", "''")
                 # Generujemy unikalny user_id
-                user_id = 100000 + i
+                user_id = id_offset + i
                 query = f"""
                     INSERT INTO users_by_role (role, user_id, username, name, email)
                     VALUES ('BENCHMARK', {user_id}, 'bench_user_{user_id}', '{name}', '{email}')
@@ -884,7 +886,7 @@ def benchmark_cassandra_insert_batch(session, table_name, data):
                 invoice_number = row['invoice_number'].replace("'", "''")
                 status = row['status'].replace("'", "''")
                 year = int(row['issue_date'][:4])
-                invoice_id = 100000 + i  # Unikalny ID dla benchmarku
+                invoice_id = id_offset + i  # Unikalny ID dla benchmarku
 
                 query = f"""
                     INSERT INTO all_invoices_with_details
@@ -1102,6 +1104,12 @@ def run_insert_benchmarks(fb_session, maria_session, orient_client, cassandra_se
     # Rozmiary testów
     batch_sizes = [100, 1000, 50000]
 
+    # ID offset accumulator for OrientDB/Cassandra to avoid collisions between batches
+    orient_customer_offset = 500000
+    orient_invoice_offset = 500000
+    cassandra_customer_offset = 100000
+    cassandra_invoice_offset = 100000
+
     for batch_idx, batch_size in enumerate(batch_sizes):
         print(f"\n{'='*40}")
         print(f"INSERT TEST: {batch_size} records")
@@ -1128,12 +1136,14 @@ def run_insert_benchmarks(fb_session, maria_session, orient_client, cassandra_se
         insert_benchmark_results.append(result)
 
         # OrientDB
-        result = benchmark_orient_insert_batch(orient_client, 'CUSTOMER', customer_data)
+        result = benchmark_orient_insert_batch(orient_client, 'CUSTOMER', customer_data, orient_customer_offset)
         insert_benchmark_results.append(result)
+        orient_customer_offset += batch_size  # Increment offset for next batch
 
         # Cassandra
-        result = benchmark_cassandra_insert_batch(cassandra_session, 'CUSTOMER', customer_data)
+        result = benchmark_cassandra_insert_batch(cassandra_session, 'CUSTOMER', customer_data, cassandra_customer_offset)
         insert_benchmark_results.append(result)
+        cassandra_customer_offset += batch_size  # Increment offset for next batch
 
         # === INVOICE INSERTS ===
         print(f"\n--- INSERT INVOICE ({batch_size} rows) ---")
@@ -1147,12 +1157,14 @@ def run_insert_benchmarks(fb_session, maria_session, orient_client, cassandra_se
         insert_benchmark_results.append(result)
 
         # OrientDB
-        result = benchmark_orient_insert_batch(orient_client, 'INVOICE', invoice_data)
+        result = benchmark_orient_insert_batch(orient_client, 'INVOICE', invoice_data, orient_invoice_offset)
         insert_benchmark_results.append(result)
+        orient_invoice_offset += batch_size  # Increment offset for next batch
 
         # Cassandra
-        result = benchmark_cassandra_insert_batch(cassandra_session, 'INVOICE', invoice_data)
+        result = benchmark_cassandra_insert_batch(cassandra_session, 'INVOICE', invoice_data, cassandra_invoice_offset)
         insert_benchmark_results.append(result)
+        cassandra_invoice_offset += batch_size  # Increment offset for next batch
 
 
 # ==========================================
