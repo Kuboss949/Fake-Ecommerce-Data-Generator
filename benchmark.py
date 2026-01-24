@@ -14,10 +14,12 @@ i zapisuje wyniki do plików CSV.
 
 import time
 import csv
+import uuid
 from datetime import datetime
 from contextlib import contextmanager
 from sqlalchemy import text
 from cassandra.cluster import Cluster
+from faker import Faker
 
 # Importy plików z zapytaniami
 from firebird_query import SELECT_QUERIES as FB_SELECT, DDL_QUERIES as FB_DDL, DML_QUERIES as FB_DML
@@ -57,6 +59,11 @@ def ExecutionTimer(name="Operation"):
 # ==========================================
 
 benchmark_results = []
+warmed_up_results = []
+insert_benchmark_results = []
+
+# Initialize Faker
+fake = Faker('pl_PL')
 
 
 # ==========================================
@@ -438,6 +445,464 @@ def benchmark_cassandra_command(session, query_name, query_text, query_type="DML
 
 
 # ==========================================
+# FUNKCJE WARM-UP I POMIAROWE
+# ==========================================
+
+def warm_up_database(fb_session, maria_session, orient_client, cassandra_session, sample_values):
+    """
+    Rozgrzewa bazy danych poprzez wykonanie wszystkich zapytan SELECT.
+    """
+    print("\n[WARM-UP] Rozgrzewanie baz danych...")
+
+    # Firebird warm-up
+    print("   Firebird...", end=" ")
+    for name, query in FB_SELECT.items():
+        try:
+            result = fb_session.execute(text(query))
+            result.fetchall()
+        except:
+            pass
+    print("OK")
+
+    # MariaDB warm-up
+    print("   MariaDB...", end=" ")
+    for name, query in MARIA_SELECT.items():
+        try:
+            result = maria_session.execute(text(query))
+            result.fetchall()
+        except:
+            pass
+    print("OK")
+
+    # OrientDB warm-up
+    print("   OrientDB...", end=" ")
+    for name, query in ORIENT_SELECT_QUERIES.items():
+        try:
+            execute_orient_query(orient_client, query)
+        except:
+            pass
+    print("OK")
+
+    # Cassandra warm-up
+    print("   Cassandra...", end=" ")
+    for name, query_template in CQL_SELECT_QUERIES.items():
+        try:
+            query = query_template.format(**sample_values)
+            result = cassandra_session.execute(query)
+            list(result)
+        except:
+            pass
+    print("OK")
+
+    print("[WARM-UP] Rozgrzewanie zakonczone.\n")
+
+
+def benchmark_sql_query_multiple(session, query_name, query_text, db_name, iterations=10):
+    """
+    Wykonuje zapytanie SQL wielokrotnie i zwraca sredni czas.
+    """
+    print(f"   {db_name}: {query_name} ({iterations}x)...", end=" ")
+
+    times = []
+    row_count = None
+
+    for i in range(iterations):
+        try:
+            start_time = time.time()
+            result = session.execute(text(query_text))
+            rows = result.fetchall()
+            end_time = time.time()
+
+            execution_time = (end_time - start_time) * 1000  # ms
+            times.append(execution_time)
+            row_count = len(rows)
+
+        except Exception as e:
+            print(f"ERROR on iteration {i+1}: {str(e)[:50]}")
+            return {
+                "database": db_name,
+                "query_type": "SELECT_WARMED_UP",
+                "query_name": query_name,
+                "avg_execution_time_ms": None,
+                "min_execution_time_ms": None,
+                "max_execution_time_ms": None,
+                "iterations": iterations,
+                "row_count": None,
+                "status": "ERROR",
+                "error": str(e)[:200]
+            }
+
+    avg_time = sum(times) / len(times)
+    min_time = min(times)
+    max_time = max(times)
+
+    print(f"OK avg={avg_time:.2f}ms (min={min_time:.2f}, max={max_time:.2f}) ({row_count} rows)")
+
+    return {
+        "database": db_name,
+        "query_type": "SELECT_WARMED_UP",
+        "query_name": query_name,
+        "avg_execution_time_ms": round(avg_time, 2),
+        "min_execution_time_ms": round(min_time, 2),
+        "max_execution_time_ms": round(max_time, 2),
+        "iterations": iterations,
+        "row_count": row_count,
+        "status": "SUCCESS",
+        "error": None
+    }
+
+
+def benchmark_orient_query_multiple(client, query_name, query_text, iterations=10):
+    """
+    Wykonuje zapytanie OrientDB wielokrotnie i zwraca sredni czas.
+    """
+    print(f"   OrientDB: {query_name} ({iterations}x)...", end=" ")
+
+    times = []
+    row_count = None
+
+    for i in range(iterations):
+        try:
+            start_time = time.time()
+            result = execute_orient_query(client, query_text)
+            end_time = time.time()
+
+            execution_time = (end_time - start_time) * 1000  # ms
+            times.append(execution_time)
+            row_count = len(result)
+
+        except Exception as e:
+            print(f"ERROR on iteration {i+1}: {str(e)[:50]}")
+            return {
+                "database": "OrientDB",
+                "query_type": "SELECT_WARMED_UP",
+                "query_name": query_name,
+                "avg_execution_time_ms": None,
+                "min_execution_time_ms": None,
+                "max_execution_time_ms": None,
+                "iterations": iterations,
+                "row_count": None,
+                "status": "ERROR",
+                "error": str(e)[:200]
+            }
+
+    avg_time = sum(times) / len(times)
+    min_time = min(times)
+    max_time = max(times)
+
+    print(f"OK avg={avg_time:.2f}ms (min={min_time:.2f}, max={max_time:.2f}) ({row_count} rows)")
+
+    return {
+        "database": "OrientDB",
+        "query_type": "SELECT_WARMED_UP",
+        "query_name": query_name,
+        "avg_execution_time_ms": round(avg_time, 2),
+        "min_execution_time_ms": round(min_time, 2),
+        "max_execution_time_ms": round(max_time, 2),
+        "iterations": iterations,
+        "row_count": row_count,
+        "status": "SUCCESS",
+        "error": None
+    }
+
+
+def benchmark_cassandra_query_multiple(session, query_name, query_text, iterations=10):
+    """
+    Wykonuje zapytanie Cassandra wielokrotnie i zwraca sredni czas.
+    """
+    print(f"   Cassandra: {query_name} ({iterations}x)...", end=" ")
+
+    times = []
+    row_count = None
+
+    for i in range(iterations):
+        try:
+            start_time = time.time()
+            result = session.execute(query_text)
+            rows = list(result)
+            end_time = time.time()
+
+            execution_time = (end_time - start_time) * 1000  # ms
+            times.append(execution_time)
+            row_count = len(rows)
+
+        except Exception as e:
+            print(f"ERROR on iteration {i+1}: {str(e)[:50]}")
+            return {
+                "database": "Cassandra",
+                "query_type": "SELECT_WARMED_UP",
+                "query_name": query_name,
+                "avg_execution_time_ms": None,
+                "min_execution_time_ms": None,
+                "max_execution_time_ms": None,
+                "iterations": iterations,
+                "row_count": None,
+                "status": "ERROR",
+                "error": str(e)[:200]
+            }
+
+    avg_time = sum(times) / len(times)
+    min_time = min(times)
+    max_time = max(times)
+
+    print(f"OK avg={avg_time:.2f}ms (min={min_time:.2f}, max={max_time:.2f}) ({row_count} rows)")
+
+    return {
+        "database": "Cassandra",
+        "query_type": "SELECT_WARMED_UP",
+        "query_name": query_name,
+        "avg_execution_time_ms": round(avg_time, 2),
+        "min_execution_time_ms": round(min_time, 2),
+        "max_execution_time_ms": round(max_time, 2),
+        "iterations": iterations,
+        "row_count": row_count,
+        "status": "SUCCESS",
+        "error": None
+    }
+
+
+# ==========================================
+# GENEROWANIE DANYCH FAKER DLA INSERT
+# ==========================================
+
+def generate_customer_data(count):
+    """
+    Generuje dane klientow za pomoca Faker.
+
+    Returns:
+        list: Lista slownikow z danymi klientow
+    """
+    customers = []
+    for _ in range(count):
+        customers.append({
+            'name': fake.name(),
+            'email': fake.email(),
+            'city': fake.city(),
+            'country': fake.country()[:50],  # Limit country name length
+            'created_at': fake.date_between(start_date='-2y', end_date='today').strftime('%Y-%m-%d')
+        })
+    return customers
+
+
+def generate_invoice_data(count, customer_id_start=1):
+    """
+    Generuje dane faktur za pomoca Faker.
+
+    Returns:
+        list: Lista slownikow z danymi faktur
+    """
+    invoices = []
+    for i in range(count):
+        invoices.append({
+            'customer_id': customer_id_start + (i % 1000),  # Rozklad na istniejacych klientow
+            'invoice_date': fake.date_between(start_date='-2y', end_date='today').strftime('%Y-%m-%d'),
+            'total_amount': round(fake.pyfloat(min_value=10, max_value=10000, right_digits=2), 2)
+        })
+    return invoices
+
+
+# ==========================================
+# FUNKCJE INSERT BENCHMARK
+# ==========================================
+
+def benchmark_sql_insert_batch(session, table_name, data, db_name):
+    """
+    Wykonuje batch INSERT dla SQL (Firebird/MariaDB).
+    """
+    count = len(data)
+    print(f"   {db_name}: INSERT {table_name} ({count} rows)...", end=" ", flush=True)
+
+    try:
+        start_time = time.time()
+
+        if table_name == 'CUSTOMER':
+            for row in data:
+                # Escape single quotes in string values
+                name = row['name'].replace("'", "''")
+                email = row['email'].replace("'", "''")
+                city = row['city'].replace("'", "''")
+                country = row['country'].replace("'", "''")
+
+                query = f"""
+                    INSERT INTO CUSTOMER (NAME, EMAIL, CITY, COUNTRY, CREATED_AT)
+                    VALUES ('{name}', '{email}', '{city}', '{country}', '{row['created_at']}')
+                """
+                session.execute(text(query))
+
+        elif table_name == 'INVOICE':
+            for row in data:
+                query = f"""
+                    INSERT INTO INVOICE (CUSTOMER_ID, INVOICE_DATE, TOTAL_AMOUNT)
+                    VALUES ({row['customer_id']}, '{row['invoice_date']}', {row['total_amount']})
+                """
+                session.execute(text(query))
+
+        session.commit()
+        end_time = time.time()
+
+        execution_time = (end_time - start_time) * 1000  # ms
+
+        print(f"OK {execution_time:.2f}ms ({execution_time/count:.2f}ms/row)")
+
+        return {
+            "database": db_name,
+            "query_type": "INSERT",
+            "query_name": f"insert_{table_name.lower()}_{count}",
+            "execution_time_ms": round(execution_time, 2),
+            "row_count": count,
+            "time_per_row_ms": round(execution_time / count, 4),
+            "status": "SUCCESS",
+            "error": None
+        }
+
+    except Exception as e:
+        session.rollback()
+        print(f"ERROR: {str(e)[:50]}")
+        return {
+            "database": db_name,
+            "query_type": "INSERT",
+            "query_name": f"insert_{table_name.lower()}_{count}",
+            "execution_time_ms": None,
+            "row_count": count,
+            "time_per_row_ms": None,
+            "status": "ERROR",
+            "error": str(e)[:200]
+        }
+
+
+def benchmark_orient_insert_batch(client, table_name, data):
+    """
+    Wykonuje batch INSERT dla OrientDB.
+    """
+    count = len(data)
+    print(f"   OrientDB: INSERT {table_name} ({count} rows)...", end=" ", flush=True)
+
+    try:
+        start_time = time.time()
+
+        if table_name == 'CUSTOMER':
+            for row in data:
+                # Escape single quotes
+                name = row['name'].replace("'", "\\'")
+                email = row['email'].replace("'", "\\'")
+                city = row['city'].replace("'", "\\'")
+                country = row['country'].replace("'", "\\'")
+
+                query = f"""
+                    INSERT INTO CUSTOMER SET NAME = '{name}', EMAIL = '{email}',
+                    CITY = '{city}', COUNTRY = '{country}', CREATED_AT = '{row['created_at']}'
+                """
+                execute_orient_command(client, query)
+
+        elif table_name == 'INVOICE':
+            for row in data:
+                query = f"""
+                    INSERT INTO INVOICE SET CUSTOMER_ID = {row['customer_id']},
+                    INVOICE_DATE = '{row['invoice_date']}', TOTAL_AMOUNT = {row['total_amount']}
+                """
+                execute_orient_command(client, query)
+
+        end_time = time.time()
+
+        execution_time = (end_time - start_time) * 1000  # ms
+
+        print(f"OK {execution_time:.2f}ms ({execution_time/count:.2f}ms/row)")
+
+        return {
+            "database": "OrientDB",
+            "query_type": "INSERT",
+            "query_name": f"insert_{table_name.lower()}_{count}",
+            "execution_time_ms": round(execution_time, 2),
+            "row_count": count,
+            "time_per_row_ms": round(execution_time / count, 4),
+            "status": "SUCCESS",
+            "error": None
+        }
+
+    except Exception as e:
+        print(f"ERROR: {str(e)[:50]}")
+        return {
+            "database": "OrientDB",
+            "query_type": "INSERT",
+            "query_name": f"insert_{table_name.lower()}_{count}",
+            "execution_time_ms": None,
+            "row_count": count,
+            "time_per_row_ms": None,
+            "status": "ERROR",
+            "error": str(e)[:200]
+        }
+
+
+def benchmark_cassandra_insert_batch(session, table_name, data):
+    """
+    Wykonuje batch INSERT dla Cassandra.
+    Uwaga: Cassandra ma inna strukture tabel, wiec uzywamy odpowiednich tabel.
+    """
+    count = len(data)
+    print(f"   Cassandra: INSERT {table_name} ({count} rows)...", end=" ", flush=True)
+
+    try:
+        start_time = time.time()
+
+        if table_name == 'CUSTOMER':
+            # Wstawiamy do tabeli customers_by_city
+            for row in data:
+                # Escape single quotes
+                name = row['name'].replace("'", "''")
+                email = row['email'].replace("'", "''")
+                city = row['city'].replace("'", "''")
+                country = row['country'].replace("'", "''")
+
+                customer_id = uuid.uuid4()
+                query = f"""
+                    INSERT INTO customer (customer_id, name, email, city, country, created_at)
+                    VALUES ({customer_id}, '{name}', '{email}', '{city}', '{country}', '{row['created_at']}')
+                """
+                session.execute(query)
+
+        elif table_name == 'INVOICE':
+            # Wstawiamy do tabeli all_invoices_with_details
+            for row in data:
+                invoice_id = uuid.uuid4()
+                year = int(row['invoice_date'][:4])
+                query = f"""
+                    INSERT INTO invoice (invoice_id, customer_id, invoice_date, total_amount)
+                    VALUES ({invoice_id}, {row['customer_id']}, '{row['invoice_date']}', {row['total_amount']})
+                """
+                session.execute(query)
+
+        end_time = time.time()
+
+        execution_time = (end_time - start_time) * 1000  # ms
+
+        print(f"OK {execution_time:.2f}ms ({execution_time/count:.2f}ms/row)")
+
+        return {
+            "database": "Cassandra",
+            "query_type": "INSERT",
+            "query_name": f"insert_{table_name.lower()}_{count}",
+            "execution_time_ms": round(execution_time, 2),
+            "row_count": count,
+            "time_per_row_ms": round(execution_time / count, 4),
+            "status": "SUCCESS",
+            "error": None
+        }
+
+    except Exception as e:
+        print(f"ERROR: {str(e)[:50]}")
+        return {
+            "database": "Cassandra",
+            "query_type": "INSERT",
+            "query_name": f"insert_{table_name.lower()}_{count}",
+            "execution_time_ms": None,
+            "row_count": count,
+            "time_per_row_ms": None,
+            "status": "ERROR",
+            "error": str(e)[:200]
+        }
+
+
+# ==========================================
 # FUNKCJE GLOWNE BENCHMARKU
 # ==========================================
 
@@ -556,6 +1021,114 @@ def run_dml_benchmarks(fb_session, maria_session, orient_client, cassandra_sessi
             print(f"   [WARN] Blad w {name}: {e}")
 
 
+def run_warmed_up_select_benchmarks(fb_session, maria_session, orient_client, cassandra_session):
+    """
+    Uruchamia benchmarki dla zapytan SELECT na rozgrzanych bazach danych.
+    Kazde zapytanie jest wykonywane 10 razy, wynik to sredni czas.
+    """
+    print("\n" + "="*60)
+    print("BENCHMARK: SELECT QUERIES (WARMED UP - 10x avg)")
+    print("="*60)
+
+    # Pobierz przykładowe wartości do parametryzowanych zapytań
+    sample_values = get_sample_values(fb_session, cassandra_session)
+
+    # Rozgrzej bazy danych
+    warm_up_database(fb_session, maria_session, orient_client, cassandra_session, sample_values)
+
+    # Firebird SELECT (10x)
+    print("\n[Firebird] SELECT (warmed up):")
+    for name, query in FB_SELECT.items():
+        result = benchmark_sql_query_multiple(fb_session, name, query, "Firebird", iterations=10)
+        warmed_up_results.append(result)
+
+    # MariaDB SELECT (10x)
+    print("\n[MariaDB] SELECT (warmed up):")
+    for name, query in MARIA_SELECT.items():
+        result = benchmark_sql_query_multiple(maria_session, name, query, "MariaDB", iterations=10)
+        warmed_up_results.append(result)
+
+    # OrientDB SELECT (10x)
+    print("\n[OrientDB] SELECT (warmed up):")
+    for name, query in ORIENT_SELECT_QUERIES.items():
+        result = benchmark_orient_query_multiple(orient_client, name, query, iterations=10)
+        warmed_up_results.append(result)
+
+    # Cassandra SELECT (10x) - z podstawionymi parametrami
+    print("\n[Cassandra] SELECT (warmed up):")
+    for name, query_template in CQL_SELECT_QUERIES.items():
+        try:
+            query = query_template.format(**sample_values)
+            result = benchmark_cassandra_query_multiple(cassandra_session, name, query, iterations=10)
+            warmed_up_results.append(result)
+        except KeyError as e:
+            print(f"   [WARN] Pominieto {name} - brak parametru {e}")
+        except Exception as e:
+            print(f"   [WARN] Blad w {name}: {e}")
+
+
+def run_insert_benchmarks(fb_session, maria_session, orient_client, cassandra_session):
+    """
+    Uruchamia benchmarki dla zapytan INSERT.
+    Testuje wstawianie 100, 1000 i 50000 rekordow do tabel CUSTOMER i INVOICE.
+    """
+    print("\n" + "="*60)
+    print("BENCHMARK: INSERT QUERIES")
+    print("="*60)
+
+    # Rozmiary testów
+    batch_sizes = [100, 1000, 50000]
+
+    for batch_size in batch_sizes:
+        print(f"\n{'='*40}")
+        print(f"INSERT TEST: {batch_size} records")
+        print(f"{'='*40}")
+
+        # Generuj dane
+        print(f"\n[DATA] Generowanie {batch_size} rekordow CUSTOMER...")
+        customer_data = generate_customer_data(batch_size)
+        print(f"[DATA] Generowanie {batch_size} rekordow INVOICE...")
+        invoice_data = generate_invoice_data(batch_size)
+
+        # === CUSTOMER INSERTS ===
+        print(f"\n--- INSERT CUSTOMER ({batch_size} rows) ---")
+
+        # Firebird
+        result = benchmark_sql_insert_batch(fb_session, 'CUSTOMER', customer_data, "Firebird")
+        insert_benchmark_results.append(result)
+
+        # MariaDB
+        result = benchmark_sql_insert_batch(maria_session, 'CUSTOMER', customer_data, "MariaDB")
+        insert_benchmark_results.append(result)
+
+        # OrientDB
+        result = benchmark_orient_insert_batch(orient_client, 'CUSTOMER', customer_data)
+        insert_benchmark_results.append(result)
+
+        # Cassandra
+        result = benchmark_cassandra_insert_batch(cassandra_session, 'CUSTOMER', customer_data)
+        insert_benchmark_results.append(result)
+
+        # === INVOICE INSERTS ===
+        print(f"\n--- INSERT INVOICE ({batch_size} rows) ---")
+
+        # Firebird
+        result = benchmark_sql_insert_batch(fb_session, 'INVOICE', invoice_data, "Firebird")
+        insert_benchmark_results.append(result)
+
+        # MariaDB
+        result = benchmark_sql_insert_batch(maria_session, 'INVOICE', invoice_data, "MariaDB")
+        insert_benchmark_results.append(result)
+
+        # OrientDB
+        result = benchmark_orient_insert_batch(orient_client, 'INVOICE', invoice_data)
+        insert_benchmark_results.append(result)
+
+        # Cassandra
+        result = benchmark_cassandra_insert_batch(cassandra_session, 'INVOICE', invoice_data)
+        insert_benchmark_results.append(result)
+
+
 # ==========================================
 # FUNKCJE ZAPISU WYNIKOW
 # ==========================================
@@ -591,37 +1164,148 @@ def save_results_to_csv():
     return filename
 
 
+def save_warmed_up_results_to_csv():
+    """
+    Zapisuje wyniki benchmarku warmed-up SELECT do pliku CSV.
+
+    Returns:
+        str: Ścieżka do zapisanego pliku CSV
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"benchmark_results_{timestamp}_warmed_up.csv"
+
+    print(f"\n[SAVE] Zapisywanie wynikow warmed-up do: {filename}")
+
+    fieldnames = [
+        "database",
+        "query_type",
+        "query_name",
+        "avg_execution_time_ms",
+        "min_execution_time_ms",
+        "max_execution_time_ms",
+        "iterations",
+        "row_count",
+        "status",
+        "error"
+    ]
+
+    with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(warmed_up_results)
+
+    print(f"OK Zapisano {len(warmed_up_results)} wynikow do {filename}")
+    return filename
+
+
+def save_insert_results_to_csv():
+    """
+    Zapisuje wyniki benchmarku INSERT do pliku CSV.
+
+    Returns:
+        str: Ścieżka do zapisanego pliku CSV
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"benchmark_results_{timestamp}_insert.csv"
+
+    print(f"\n[SAVE] Zapisywanie wynikow INSERT do: {filename}")
+
+    fieldnames = [
+        "database",
+        "query_type",
+        "query_name",
+        "execution_time_ms",
+        "row_count",
+        "time_per_row_ms",
+        "status",
+        "error"
+    ]
+
+    with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(insert_benchmark_results)
+
+    print(f"OK Zapisano {len(insert_benchmark_results)} wynikow do {filename}")
+    return filename
+
+
 def print_summary():
     """Wyswietla podsumowanie wynikow benchmarku"""
     print("\n" + "="*60)
     print("PODSUMOWANIE BENCHMARKU")
     print("="*60)
 
-    databases = set(r["database"] for r in benchmark_results)
+    # Standard benchmark results
+    if benchmark_results:
+        print("\n--- Standard Benchmarks ---")
+        databases = set(r["database"] for r in benchmark_results)
 
-    for db in databases:
-        db_results = [r for r in benchmark_results if r["database"] == db]
-        success_count = len([r for r in db_results if r["status"] == "SUCCESS"])
-        error_count = len([r for r in db_results if r["status"] == "ERROR"])
+        for db in databases:
+            db_results = [r for r in benchmark_results if r["database"] == db]
+            success_count = len([r for r in db_results if r["status"] == "SUCCESS"])
+            error_count = len([r for r in db_results if r["status"] == "ERROR"])
 
-        avg_time = None
-        if success_count > 0:
-            times = [r["execution_time_ms"] for r in db_results if r["execution_time_ms"] is not None]
-            if times:
-                avg_time = sum(times) / len(times)
+            avg_time = None
+            if success_count > 0:
+                times = [r["execution_time_ms"] for r in db_results if r["execution_time_ms"] is not None]
+                if times:
+                    avg_time = sum(times) / len(times)
 
-        print(f"\n{db}:")
-        print(f"   Sukces: {success_count}")
-        print(f"   Bledy: {error_count}")
-        if avg_time:
-            print(f"   Sredni czas: {avg_time:.2f}ms")
+            print(f"\n{db}:")
+            print(f"   Sukces: {success_count}")
+            print(f"   Bledy: {error_count}")
+            if avg_time:
+                print(f"   Sredni czas: {avg_time:.2f}ms")
+
+    # Warmed-up benchmark results
+    if warmed_up_results:
+        print("\n--- Warmed-up SELECT Benchmarks (10x avg) ---")
+        databases = set(r["database"] for r in warmed_up_results)
+
+        for db in databases:
+            db_results = [r for r in warmed_up_results if r["database"] == db]
+            success_count = len([r for r in db_results if r["status"] == "SUCCESS"])
+            error_count = len([r for r in db_results if r["status"] == "ERROR"])
+
+            avg_time = None
+            if success_count > 0:
+                times = [r["avg_execution_time_ms"] for r in db_results if r["avg_execution_time_ms"] is not None]
+                if times:
+                    avg_time = sum(times) / len(times)
+
+            print(f"\n{db}:")
+            print(f"   Sukces: {success_count}")
+            print(f"   Bledy: {error_count}")
+            if avg_time:
+                print(f"   Sredni czas (avg z 10 iteracji): {avg_time:.2f}ms")
+
+    # Insert benchmark results
+    if insert_benchmark_results:
+        print("\n--- INSERT Benchmarks ---")
+        databases = set(r["database"] for r in insert_benchmark_results)
+
+        for db in databases:
+            db_results = [r for r in insert_benchmark_results if r["database"] == db]
+            success_count = len([r for r in db_results if r["status"] == "SUCCESS"])
+            error_count = len([r for r in db_results if r["status"] == "ERROR"])
+
+            total_rows = sum(r["row_count"] for r in db_results if r["row_count"] is not None)
+            total_time = sum(r["execution_time_ms"] for r in db_results if r["execution_time_ms"] is not None)
+
+            print(f"\n{db}:")
+            print(f"   Sukces: {success_count}")
+            print(f"   Bledy: {error_count}")
+            print(f"   Laczna liczba wierszy: {total_rows}")
+            if total_time > 0:
+                print(f"   Laczny czas INSERT: {total_time:.2f}ms")
 
 
 # ==========================================
 # MAIN
 # ==========================================
 
-def run_benchmark(fb_session, maria_session, orient_client):
+def run_benchmark(fb_session, maria_session, orient_client, run_warmed_up=True, run_inserts=True):
     """
     Główna funkcja benchmarku - przyjmuje sesje z zewnątrz.
 
@@ -629,9 +1313,11 @@ def run_benchmark(fb_session, maria_session, orient_client):
         fb_session: Sesja Firebird
         maria_session: Sesja MariaDB
         orient_client: Klient OrientDB
+        run_warmed_up: Czy uruchomic benchmarki warmed-up SELECT (domyslnie True)
+        run_inserts: Czy uruchomic benchmarki INSERT (domyslnie True)
 
     Returns:
-        str: Ścieżka do pliku CSV z wynikami
+        dict: Słownik ze ścieżkami do plików CSV z wynikami
     """
     print("\n" + "="*60)
     print("BENCHMARK BAZ DANYCH - START")
@@ -640,8 +1326,10 @@ def run_benchmark(fb_session, maria_session, orient_client):
     # Połączenie tylko z Cassandrą (inne sesje są z parametrów)
     cassandra_session, cassandra_cluster = connect_cassandra()
 
+    csv_paths = {}
+
     try:
-        # Uruchomienie benchmarków
+        # Uruchomienie standardowych benchmarków
         with ExecutionTimer("SELECT benchmarks"):
             run_select_benchmarks(fb_session, maria_session, orient_client, cassandra_session)
 
@@ -651,21 +1339,38 @@ def run_benchmark(fb_session, maria_session, orient_client):
         with ExecutionTimer("DML benchmarks"):
             run_dml_benchmarks(fb_session, maria_session, orient_client, cassandra_session)
 
+        # Uruchomienie benchmarkow warmed-up SELECT
+        if run_warmed_up:
+            with ExecutionTimer("Warmed-up SELECT benchmarks"):
+                run_warmed_up_select_benchmarks(fb_session, maria_session, orient_client, cassandra_session)
+
+        # Uruchomienie benchmarkow INSERT
+        if run_inserts:
+            with ExecutionTimer("INSERT benchmarks"):
+                run_insert_benchmarks(fb_session, maria_session, orient_client, cassandra_session)
+
         # Podsumowanie i zapis
         print_summary()
-        csv_path = save_results_to_csv()
+
+        csv_paths['standard'] = save_results_to_csv()
+
+        if run_warmed_up and warmed_up_results:
+            csv_paths['warmed_up'] = save_warmed_up_results_to_csv()
+
+        if run_inserts and insert_benchmark_results:
+            csv_paths['insert'] = save_insert_results_to_csv()
 
         print("\n" + "="*60)
         print("BENCHMARK BAZ DANYCH - KONIEC")
         print("="*60)
 
-        return csv_path
+        return csv_paths
 
     except Exception as e:
         print(f"\n[ERROR] KRYTYCZNY BLAD: {e}")
         import traceback
         traceback.print_exc()
-        return None
+        return csv_paths
 
     finally:
         # Zamkniecie tylko Cassandry (inne sesje sa zarzadzane w main.py)
