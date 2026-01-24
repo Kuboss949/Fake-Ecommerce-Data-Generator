@@ -19,6 +19,7 @@ from datetime import datetime
 from contextlib import contextmanager
 from sqlalchemy import text
 from cassandra.cluster import Cluster
+from cassandra.query import BatchStatement, SimpleStatement
 from faker import Faker
 
 # Importy plików z zapytaniami
@@ -773,7 +774,7 @@ def benchmark_sql_insert_batch(session, table_name, data, db_name):
 
 def benchmark_orient_insert_batch(client, table_name, data, id_offset=500000):
     """
-    Wykonuje batch INSERT dla OrientDB.
+    Wykonuje batch INSERT dla OrientDB uzywajac batch script.
     OrientDB wymaga jawnych ID (CUSTOMER_ID, INVOICE_ID) - ma na nich unikalne indeksy.
     """
     count = len(data)
@@ -782,40 +783,46 @@ def benchmark_orient_insert_batch(client, table_name, data, id_offset=500000):
     try:
         start_time = time.time()
 
-        if table_name == 'CUSTOMER':
-            for i, row in enumerate(data):
-                # Escape single quotes for OrientDB
-                name = row['name'].replace("'", "\\'")
-                email = row['email'].replace("'", "\\'")
-                phone = row['phone'].replace("'", "\\'")
-                address = row['address'].replace("'", "\\'")
-                city = row['city'].replace("'", "\\'")
-                country = row['country'].replace("'", "\\'")
-                customer_id = id_offset + i  # Unique ID for benchmark
+        # Budujemy batch script - dzielimy na mniejsze partie (max 500 na batch)
+        batch_size = 500
+        for batch_start in range(0, count, batch_size):
+            batch_end = min(batch_start + batch_size, count)
+            batch_data = data[batch_start:batch_end]
 
-                query = f"""
-                    INSERT INTO CUSTOMER SET CUSTOMER_ID = {customer_id}, NAME = '{name}', EMAIL = '{email}',
-                    PHONE = '{phone}', ADDRESS = '{address}', CITY = '{city}', COUNTRY = '{country}'
-                """
-                execute_orient_command(client, query)
+            commands = ["begin"]
 
-        elif table_name == 'INVOICE':
-            for i, row in enumerate(data):
-                invoice_number = row['invoice_number'].replace("'", "\\'")
-                status = row['status'].replace("'", "\\'")
-                invoice_id = id_offset + i  # Unique ID for benchmark
-                query = f"""
-                    INSERT INTO INVOICE SET INVOICE_ID = {invoice_id}, INVOICE_NUMBER = '{invoice_number}',
-                    CUSTOMER_ID = {row['customer_id']}, ISSUE_DATE = '{row['issue_date']}',
-                    DUE_DATE = '{row['due_date']}', TOTAL_AMOUNT = {row['total_amount']}, STATUS = '{status}'
-                """
-                execute_orient_command(client, query)
+            if table_name == 'CUSTOMER':
+                for i, row in enumerate(batch_data):
+                    name = row['name'].replace("'", "\\'").replace('"', '\\"')
+                    email = row['email'].replace("'", "\\'").replace('"', '\\"')
+                    phone = row['phone'].replace("'", "\\'").replace('"', '\\"')
+                    address = row['address'].replace("'", "\\'").replace('"', '\\"')
+                    city = row['city'].replace("'", "\\'").replace('"', '\\"')
+                    country = row['country'].replace("'", "\\'").replace('"', '\\"')
+                    customer_id = id_offset + batch_start + i
+
+                    cmd = f"INSERT INTO CUSTOMER SET CUSTOMER_ID = {customer_id}, NAME = '{name}', EMAIL = '{email}', PHONE = '{phone}', ADDRESS = '{address}', CITY = '{city}', COUNTRY = '{country}'"
+                    commands.append(cmd)
+
+            elif table_name == 'INVOICE':
+                for i, row in enumerate(batch_data):
+                    invoice_number = row['invoice_number'].replace("'", "\\'").replace('"', '\\"')
+                    status = row['status'].replace("'", "\\'").replace('"', '\\"')
+                    invoice_id = id_offset + batch_start + i
+
+                    cmd = f"INSERT INTO INVOICE SET INVOICE_ID = {invoice_id}, INVOICE_NUMBER = '{invoice_number}', CUSTOMER_ID = {row['customer_id']}, ISSUE_DATE = '{row['issue_date']}', DUE_DATE = '{row['due_date']}', TOTAL_AMOUNT = {row['total_amount']}, STATUS = '{status}'"
+                    commands.append(cmd)
+
+            commands.append("commit")
+            batch_script = ";\n".join(commands)
+
+            client.batch(batch_script)
 
         end_time = time.time()
 
         execution_time = (end_time - start_time) * 1000  # ms
 
-        print(f"OK {execution_time:.2f}ms ({execution_time/count:.2f}ms/row)")
+        print(f"OK {execution_time:.2f}ms ({execution_time/count:.4f}ms/row)")
 
         return {
             "database": "OrientDB",
@@ -844,7 +851,7 @@ def benchmark_orient_insert_batch(client, table_name, data, id_offset=500000):
 
 def benchmark_cassandra_insert_batch(session, table_name, data, id_offset=100000):
     """
-    Wykonuje batch INSERT dla Cassandra.
+    Wykonuje batch INSERT dla Cassandra uzywajac BatchStatement.
     Uwaga: Cassandra ma zdenormalizowana strukture tabel.
     - Dla CUSTOMER: wstawiamy do users_by_role (jako test insert)
     - Dla INVOICE: wstawiamy do all_invoices_with_details
@@ -855,41 +862,55 @@ def benchmark_cassandra_insert_batch(session, table_name, data, id_offset=100000
     try:
         start_time = time.time()
 
+        # Cassandra BatchStatement ma limit ~50KB, wiec dzielimy na mniejsze partie
+        batch_size = 50  # Bezpieczny rozmiar dla Cassandry
+
         if table_name == 'CUSTOMER':
-            # Cassandra nie ma prostej tabeli CUSTOMER
-            # Wstawiamy do users_by_role jako test wydajnosci INSERT
-            for i, row in enumerate(data):
-                name = row['name'].replace("'", "''")
-                email = row['email'].replace("'", "''")
-                # Generujemy unikalny user_id
-                user_id = id_offset + i
-                query = f"""
-                    INSERT INTO users_by_role (role, user_id, username, name, email)
-                    VALUES ('BENCHMARK', {user_id}, 'bench_user_{user_id}', '{name}', '{email}')
-                """
-                session.execute(query)
+            # Przygotowujemy prepared statement
+            prepared = session.prepare("""
+                INSERT INTO users_by_role (role, user_id, username, name, email)
+                VALUES (?, ?, ?, ?, ?)
+            """)
+
+            for batch_start in range(0, count, batch_size):
+                batch = BatchStatement()
+                batch_end = min(batch_start + batch_size, count)
+
+                for i in range(batch_start, batch_end):
+                    row = data[i]
+                    user_id = id_offset + i
+                    batch.add(prepared, ('BENCHMARK', user_id, f'bench_user_{user_id}', row['name'], row['email']))
+
+                session.execute(batch)
 
         elif table_name == 'INVOICE':
-            # Wstawiamy do all_invoices_with_details
-            for i, row in enumerate(data):
-                invoice_number = row['invoice_number'].replace("'", "''")
-                status = row['status'].replace("'", "''")
-                year = int(row['issue_date'][:4])
-                invoice_id = id_offset + i  # Unikalny ID dla benchmarku
+            # Przygotowujemy prepared statement
+            prepared = session.prepare("""
+                INSERT INTO all_invoices_with_details
+                (year, invoice_id, invoice_number, total_amount, status, issue_date, due_date, customer_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """)
 
-                query = f"""
-                    INSERT INTO all_invoices_with_details
-                    (year, invoice_id, invoice_number, total_amount, status, issue_date, due_date, customer_id)
-                    VALUES ({year}, {invoice_id}, '{invoice_number}', {row['total_amount']}, '{status}',
-                            '{row['issue_date']}', '{row['due_date']}', {row['customer_id']})
-                """
-                session.execute(query)
+            for batch_start in range(0, count, batch_size):
+                batch = BatchStatement()
+                batch_end = min(batch_start + batch_size, count)
+
+                for i in range(batch_start, batch_end):
+                    row = data[i]
+                    year = int(row['issue_date'][:4])
+                    invoice_id = id_offset + i
+                    batch.add(prepared, (
+                        year, invoice_id, row['invoice_number'], row['total_amount'],
+                        row['status'], row['issue_date'], row['due_date'], row['customer_id']
+                    ))
+
+                session.execute(batch)
 
         end_time = time.time()
 
         execution_time = (end_time - start_time) * 1000  # ms
 
-        print(f"OK {execution_time:.2f}ms ({execution_time/count:.2f}ms/row)")
+        print(f"OK {execution_time:.2f}ms ({execution_time/count:.4f}ms/row)")
 
         return {
             "database": "Cassandra",
