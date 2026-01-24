@@ -66,7 +66,7 @@ ORIENT_DML_QUERIES = {
     # Najpierw usuwamy powiazane ORDER_ITEM, potem PRODUCT
     "delete_order_items_for_products": "DELETE VERTEX ORDER_ITEM",
 
-    "delete_all_products": "DELETE VERTEX PRODUCT"
+    "delete_all_products": "DELETE FROM ORDER_ITEM UNSAFE"
 }
 
 # ==========================================

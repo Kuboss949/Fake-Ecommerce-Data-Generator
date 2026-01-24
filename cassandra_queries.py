@@ -139,6 +139,6 @@ CQL_DML_QUERIES = {
     # 5. DELETE ALL PRODUCTS - UWAGA: nie mozna truncate tabeli z counterami
     # Trzeba uzyc DELETE dla kazdego wiersza lub drop/recreate
     "delete_all_products": """
-        TRUNCATE payments_by_amount_range
+        TRUNCATE order_items_by_product
     """
 }

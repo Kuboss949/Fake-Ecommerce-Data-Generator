@@ -132,8 +132,7 @@ DML_QUERIES = {
                            """,
 
     "delete_all_products": """
-                           DELETE
-                           FROM PRODUCT
+                           DELETE FROM ORDER_ITEM
                            """
 }
 
