@@ -668,6 +668,7 @@ def benchmark_cassandra_query_multiple(session, query_name, query_text, iteratio
 def generate_customer_data(count):
     """
     Generuje dane klientow za pomoca Faker.
+    Kolumny: NAME, EMAIL, PHONE, ADDRESS, CITY, COUNTRY
 
     Returns:
         list: Lista slownikow z danymi klientow
@@ -677,9 +678,10 @@ def generate_customer_data(count):
         customers.append({
             'name': fake.name(),
             'email': fake.email(),
-            'city': fake.city(),
-            'country': fake.country()[:50],  # Limit country name length
-            'created_at': fake.date_between(start_date='-2y', end_date='today').strftime('%Y-%m-%d')
+            'phone': fake.phone_number()[:50],
+            'address': fake.street_address()[:255],
+            'city': fake.city()[:100],
+            'country': fake.country()[:100]
         })
     return customers
 
@@ -687,16 +689,22 @@ def generate_customer_data(count):
 def generate_invoice_data(count, customer_id_start=1):
     """
     Generuje dane faktur za pomoca Faker.
+    Kolumny: INVOICE_NUMBER, CUSTOMER_ID, ISSUE_DATE, DUE_DATE, TOTAL_AMOUNT, STATUS
 
     Returns:
         list: Lista slownikow z danymi faktur
     """
     invoices = []
     for i in range(count):
+        issue_date = fake.date_between(start_date='-2y', end_date='today')
+        due_date = fake.date_between(start_date=issue_date, end_date='+60d')
         invoices.append({
+            'invoice_number': f"INV-BENCH-{fake.unique.random_number(digits=10)}",
             'customer_id': customer_id_start + (i % 1000),  # Rozklad na istniejacych klientow
-            'invoice_date': fake.date_between(start_date='-2y', end_date='today').strftime('%Y-%m-%d'),
-            'total_amount': round(fake.pyfloat(min_value=10, max_value=10000, right_digits=2), 2)
+            'issue_date': issue_date.strftime('%Y-%m-%d'),
+            'due_date': due_date.strftime('%Y-%m-%d'),
+            'total_amount': round(fake.pyfloat(min_value=10, max_value=10000, right_digits=2), 2),
+            'status': fake.random_element(['PAID', 'UNPAID', 'OVERDUE'])
         })
     return invoices
 
@@ -720,20 +728,24 @@ def benchmark_sql_insert_batch(session, table_name, data, db_name):
                 # Escape single quotes in string values
                 name = row['name'].replace("'", "''")
                 email = row['email'].replace("'", "''")
+                phone = row['phone'].replace("'", "''")
+                address = row['address'].replace("'", "''")
                 city = row['city'].replace("'", "''")
                 country = row['country'].replace("'", "''")
 
                 query = f"""
-                    INSERT INTO CUSTOMER (NAME, EMAIL, CITY, COUNTRY, CREATED_AT)
-                    VALUES ('{name}', '{email}', '{city}', '{country}', '{row['created_at']}')
+                    INSERT INTO CUSTOMER (NAME, EMAIL, PHONE, ADDRESS, CITY, COUNTRY)
+                    VALUES ('{name}', '{email}', '{phone}', '{address}', '{city}', '{country}')
                 """
                 session.execute(text(query))
 
         elif table_name == 'INVOICE':
             for row in data:
+                invoice_number = row['invoice_number'].replace("'", "''")
+                status = row['status'].replace("'", "''")
                 query = f"""
-                    INSERT INTO INVOICE (CUSTOMER_ID, INVOICE_DATE, TOTAL_AMOUNT)
-                    VALUES ({row['customer_id']}, '{row['invoice_date']}', {row['total_amount']})
+                    INSERT INTO INVOICE (INVOICE_NUMBER, CUSTOMER_ID, ISSUE_DATE, DUE_DATE, TOTAL_AMOUNT, STATUS)
+                    VALUES ('{invoice_number}', {row['customer_id']}, '{row['issue_date']}', '{row['due_date']}', {row['total_amount']}, '{status}')
                 """
                 session.execute(text(query))
 
@@ -773,6 +785,7 @@ def benchmark_sql_insert_batch(session, table_name, data, db_name):
 def benchmark_orient_insert_batch(client, table_name, data):
     """
     Wykonuje batch INSERT dla OrientDB.
+    OrientDB uzywa INSERT INTO ... CONTENT {...} lub INSERT INTO ... SET ...
     """
     count = len(data)
     print(f"   OrientDB: INSERT {table_name} ({count} rows)...", end=" ", flush=True)
@@ -782,23 +795,28 @@ def benchmark_orient_insert_batch(client, table_name, data):
 
         if table_name == 'CUSTOMER':
             for row in data:
-                # Escape single quotes
+                # Escape single quotes for OrientDB
                 name = row['name'].replace("'", "\\'")
                 email = row['email'].replace("'", "\\'")
+                phone = row['phone'].replace("'", "\\'")
+                address = row['address'].replace("'", "\\'")
                 city = row['city'].replace("'", "\\'")
                 country = row['country'].replace("'", "\\'")
 
                 query = f"""
                     INSERT INTO CUSTOMER SET NAME = '{name}', EMAIL = '{email}',
-                    CITY = '{city}', COUNTRY = '{country}', CREATED_AT = '{row['created_at']}'
+                    PHONE = '{phone}', ADDRESS = '{address}', CITY = '{city}', COUNTRY = '{country}'
                 """
                 execute_orient_command(client, query)
 
         elif table_name == 'INVOICE':
             for row in data:
+                invoice_number = row['invoice_number'].replace("'", "\\'")
+                status = row['status'].replace("'", "\\'")
                 query = f"""
-                    INSERT INTO INVOICE SET CUSTOMER_ID = {row['customer_id']},
-                    INVOICE_DATE = '{row['invoice_date']}', TOTAL_AMOUNT = {row['total_amount']}
+                    INSERT INTO INVOICE SET INVOICE_NUMBER = '{invoice_number}', CUSTOMER_ID = {row['customer_id']},
+                    ISSUE_DATE = '{row['issue_date']}', DUE_DATE = '{row['due_date']}',
+                    TOTAL_AMOUNT = {row['total_amount']}, STATUS = '{status}'
                 """
                 execute_orient_command(client, query)
 
@@ -836,7 +854,9 @@ def benchmark_orient_insert_batch(client, table_name, data):
 def benchmark_cassandra_insert_batch(session, table_name, data):
     """
     Wykonuje batch INSERT dla Cassandra.
-    Uwaga: Cassandra ma inna strukture tabel, wiec uzywamy odpowiednich tabel.
+    Uwaga: Cassandra ma zdenormalizowana strukture tabel.
+    - Dla CUSTOMER: wstawiamy do users_by_role (jako test insert)
+    - Dla INVOICE: wstawiamy do all_invoices_with_details
     """
     count = len(data)
     print(f"   Cassandra: INSERT {table_name} ({count} rows)...", end=" ", flush=True)
@@ -845,29 +865,32 @@ def benchmark_cassandra_insert_batch(session, table_name, data):
         start_time = time.time()
 
         if table_name == 'CUSTOMER':
-            # Wstawiamy do tabeli customers_by_city
-            for row in data:
-                # Escape single quotes
+            # Cassandra nie ma prostej tabeli CUSTOMER
+            # Wstawiamy do users_by_role jako test wydajnosci INSERT
+            for i, row in enumerate(data):
                 name = row['name'].replace("'", "''")
                 email = row['email'].replace("'", "''")
-                city = row['city'].replace("'", "''")
-                country = row['country'].replace("'", "''")
-
-                customer_id = uuid.uuid4()
+                # Generujemy unikalny user_id
+                user_id = 100000 + i
                 query = f"""
-                    INSERT INTO customer (customer_id, name, email, city, country, created_at)
-                    VALUES ({customer_id}, '{name}', '{email}', '{city}', '{country}', '{row['created_at']}')
+                    INSERT INTO users_by_role (role, user_id, username, name, email)
+                    VALUES ('BENCHMARK', {user_id}, 'bench_user_{user_id}', '{name}', '{email}')
                 """
                 session.execute(query)
 
         elif table_name == 'INVOICE':
-            # Wstawiamy do tabeli all_invoices_with_details
-            for row in data:
-                invoice_id = uuid.uuid4()
-                year = int(row['invoice_date'][:4])
+            # Wstawiamy do all_invoices_with_details
+            for i, row in enumerate(data):
+                invoice_number = row['invoice_number'].replace("'", "''")
+                status = row['status'].replace("'", "''")
+                year = int(row['issue_date'][:4])
+                invoice_id = 100000 + i  # Unikalny ID dla benchmarku
+
                 query = f"""
-                    INSERT INTO invoice (invoice_id, customer_id, invoice_date, total_amount)
-                    VALUES ({invoice_id}, {row['customer_id']}, '{row['invoice_date']}', {row['total_amount']})
+                    INSERT INTO all_invoices_with_details
+                    (year, invoice_id, invoice_number, total_amount, status, issue_date, due_date, customer_id)
+                    VALUES ({year}, {invoice_id}, '{invoice_number}', {row['total_amount']}, '{status}',
+                            '{row['issue_date']}', '{row['due_date']}', {row['customer_id']})
                 """
                 session.execute(query)
 
@@ -1079,10 +1102,13 @@ def run_insert_benchmarks(fb_session, maria_session, orient_client, cassandra_se
     # Rozmiary testów
     batch_sizes = [100, 1000, 50000]
 
-    for batch_size in batch_sizes:
+    for batch_idx, batch_size in enumerate(batch_sizes):
         print(f"\n{'='*40}")
         print(f"INSERT TEST: {batch_size} records")
         print(f"{'='*40}")
+
+        # Reset Faker unique generator to avoid duplicates between batches
+        fake.unique.clear()
 
         # Generuj dane
         print(f"\n[DATA] Generowanie {batch_size} rekordow CUSTOMER...")
