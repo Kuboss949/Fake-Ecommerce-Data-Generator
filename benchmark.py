@@ -715,7 +715,8 @@ def generate_invoice_data(count, customer_id_start=1):
 
 def benchmark_sql_insert_batch(session, table_name, data, db_name):
     """
-    Wykonuje batch INSERT dla SQL (Firebird/MariaDB).
+    Wykonuje zoptymalizowany batch INSERT (Prepared Statements).
+    SQLAlchemy automatycznie binduje parametry z listy slownikow.
     """
     count = len(data)
     print(f"   {db_name}: INSERT {table_name} ({count} rows)...", end=" ", flush=True)
@@ -724,37 +725,25 @@ def benchmark_sql_insert_batch(session, table_name, data, db_name):
         start_time = time.time()
 
         if table_name == 'CUSTOMER':
-            for row in data:
-                # Escape single quotes in string values
-                name = row['name'].replace("'", "''")
-                email = row['email'].replace("'", "''")
-                phone = row['phone'].replace("'", "''")
-                address = row['address'].replace("'", "''")
-                city = row['city'].replace("'", "''")
-                country = row['country'].replace("'", "''")
-
-                query = f"""
-                    INSERT INTO CUSTOMER (NAME, EMAIL, PHONE, ADDRESS, CITY, COUNTRY)
-                    VALUES ('{name}', '{email}', '{phone}', '{address}', '{city}', '{country}')
-                """
-                session.execute(text(query))
+            stmt = text("""
+                INSERT INTO CUSTOMER (NAME, EMAIL, PHONE, ADDRESS, CITY, COUNTRY)
+                VALUES (:name, :email, :phone, :address, :city, :country)
+            """)
+            session.execute(stmt, data)
 
         elif table_name == 'INVOICE':
-            for row in data:
-                invoice_number = row['invoice_number'].replace("'", "''")
-                status = row['status'].replace("'", "''")
-                query = f"""
-                    INSERT INTO INVOICE (INVOICE_NUMBER, CUSTOMER_ID, ISSUE_DATE, DUE_DATE, TOTAL_AMOUNT, STATUS)
-                    VALUES ('{invoice_number}', {row['customer_id']}, '{row['issue_date']}', '{row['due_date']}', {row['total_amount']}, '{status}')
-                """
-                session.execute(text(query))
+            stmt = text("""
+                INSERT INTO INVOICE (INVOICE_NUMBER, CUSTOMER_ID, ISSUE_DATE, DUE_DATE, TOTAL_AMOUNT, STATUS)
+                VALUES (:invoice_number, :customer_id, :issue_date, :due_date, :total_amount, :status)
+            """)
+            session.execute(stmt, data)
 
         session.commit()
         end_time = time.time()
 
         execution_time = (end_time - start_time) * 1000  # ms
 
-        print(f"OK {execution_time:.2f}ms ({execution_time/count:.2f}ms/row)")
+        print(f"OK {execution_time:.2f}ms ({execution_time/count:.4f}ms/row)")
 
         return {
             "database": db_name,
